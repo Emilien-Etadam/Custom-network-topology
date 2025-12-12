@@ -1057,7 +1057,7 @@ function renderDiscoveryResults() {
   });
 }
 
-function addDiscoveredNodes() {
+async function addDiscoveredNodes() {
   const selected = discoveredHosts.filter(h => h.selected);
   const startCount = config.nodes.length;
 
@@ -1081,8 +1081,16 @@ function addDiscoveredNodes() {
 
   saveConfig();
   closeModal('discovery-modal');
-  renderTree(config.nodes);
-  renderHostList(config.nodes);
+
+  // Restart monitoring with new nodes if it was active
+  if (monitoringActive) {
+    await stopMonitoring();
+    await startMonitoring();
+  } else {
+    // If monitoring is not active, just render from config
+    renderTree(config.nodes);
+    renderHostList(config.nodes);
+  }
 }
 
 // ============================================
