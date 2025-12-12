@@ -1122,8 +1122,23 @@ function setupMonitoringListener() {
   window.electronAPI.monitor.onStatus((data) => {
     document.getElementById('last-updated').textContent = 'Last Update: ' + data.updated;
 
-    // Update uptime tracking
-    data.nodes.forEach(node => {
+    // Merge monitoring data with current config positions
+    // This preserves user-moved positions while updating status
+    const mergedNodes = data.nodes.map(node => {
+      const configNode = config.nodes.find(n => n.id === node.id);
+      if (configNode) {
+        // Use positions from config (user may have moved nodes)
+        node.x = configNode.x;
+        node.y = configNode.y;
+        // Also preserve other config properties
+        node.icon = configNode.icon;
+        node.iconType = configNode.iconType;
+        node.sshPort = configNode.sshPort;
+        node.sshUser = configNode.sshUser;
+        node.sshPass = configNode.sshPass;
+      }
+
+      // Update uptime tracking
       const tracker = uptimeTrackers.get(node.id);
       const currentStatus = node.status;
 
@@ -1140,9 +1155,11 @@ function setupMonitoringListener() {
       // Calculate uptime string
       const elapsed = Date.now() - (uptimeTrackers.get(node.id)?.since || Date.now());
       node.uptime = formatDuration(elapsed);
+
+      return node;
     });
 
-    networkData = data.nodes;
+    networkData = mergedNodes;
     renderTree(networkData);
     renderHostList(networkData);
   });
