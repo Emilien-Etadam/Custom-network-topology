@@ -873,6 +873,7 @@ function saveNode() {
 // ============================================
 
 let discoveredHosts = [];
+let networkInterfaces = []; // Store interfaces for reference
 
 async function openDiscoveryModal() {
   if (!window.electronAPI) {
@@ -881,31 +882,65 @@ async function openDiscoveryModal() {
   }
 
   // Get network interfaces
-  const interfaces = await window.electronAPI.network.getLocalInfo();
+  networkInterfaces = await window.electronAPI.network.getLocalInfo();
   const select = document.getElementById('discovery-interface');
   select.innerHTML = '';
 
-  interfaces.forEach((iface, idx) => {
+  networkInterfaces.forEach((iface, idx) => {
     const opt = document.createElement('option');
     opt.value = idx;
-    opt.textContent = `${iface.interface} - ${iface.address}`;
+    opt.textContent = `${iface.interface} - ${iface.address} (${iface.netmask})`;
     opt.dataset.address = iface.address;
+    opt.dataset.netmask = iface.netmask;
     select.appendChild(opt);
   });
 
+  // Add change listener to update IP range when interface changes
+  select.onchange = () => updateDiscoveryRange();
+
   // Set default base IP from first interface
-  if (interfaces.length > 0) {
-    const parts = interfaces[0].address.split('.');
-    document.getElementById('discovery-base').value = parts.slice(0, 3).join('.');
-  }
+  updateDiscoveryRange();
 
   discoveredHosts = [];
   document.getElementById('discovery-results').classList.add('hidden');
   document.getElementById('discovery-status').classList.add('hidden');
   document.getElementById('btn-add-discovered').classList.add('hidden');
   document.getElementById('btn-start-scan').classList.remove('hidden');
+  document.getElementById('btn-start-scan').textContent = 'Start Scan';
 
   openModal('discovery-modal');
+}
+
+function updateDiscoveryRange() {
+  const select = document.getElementById('discovery-interface');
+  const selectedIdx = parseInt(select.value) || 0;
+
+  if (networkInterfaces.length > 0 && networkInterfaces[selectedIdx]) {
+    const iface = networkInterfaces[selectedIdx];
+    const ipParts = iface.address.split('.');
+    const maskParts = iface.netmask.split('.');
+
+    // Calculate network range based on netmask
+    const baseIp = ipParts.slice(0, 3).join('.');
+    document.getElementById('discovery-base').value = baseIp;
+
+    // Calculate start and end based on netmask
+    // For /24 (255.255.255.0): range is 1-254
+    // For /16 (255.255.0.0): we'll limit to current subnet
+    const lastOctetMask = parseInt(maskParts[3]) || 0;
+
+    if (lastOctetMask === 0) {
+      // /24 or larger - scan 1-254
+      document.getElementById('discovery-start').value = 1;
+      document.getElementById('discovery-end').value = 254;
+    } else {
+      // Smaller subnet - calculate range
+      const hostBits = 256 - lastOctetMask;
+      const networkPart = parseInt(ipParts[3]) & lastOctetMask;
+      document.getElementById('discovery-start').value = networkPart + 1;
+      document.getElementById('discovery-end').value = Math.min(networkPart + hostBits - 2, 254);
+    }
+  }
 }
 
 async function startNetworkScan() {
