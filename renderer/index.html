@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' data:;">
+  <title>Network Topology</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="css/xterm.css">
+
+  <style>
+    :root { --bg:#0f172a; --muted:#94a3b8; }
+    body { margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: #0b1220; color:#e6eef8; height:100vh; overflow:hidden; user-select: none; }
+
+    /* Main Layout */
+    #app-container { display: flex; flex-direction: column; height: 100vh; }
+    #main-content { display: flex; flex: 1; overflow: hidden; }
+    #viewport-wrapper { flex: 1; position: relative; overflow: hidden; }
+
+    #viewport { width: 100%; height: 100%; overflow: hidden; cursor: grab; }
+    #viewport:active { cursor: grabbing; }
+    #world { transform-origin: 0 0; width: 100%; height: 100%; position: relative; }
+
+    #grid-layer { width: 300%; height: 300%; position: absolute; top: 0; left: 0; pointer-events: none; background-size: 5vw 5vh; }
+    .grid-bg { background-image: linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px); }
+    .grid-label { position: absolute; font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.2); pointer-events: none; display: flex; align-items: center; justify-content: center; }
+
+    .card { background: rgba(30, 41, 59, 0.82); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.04); border-radius: 14px; }
+    .node-container { position: absolute; transform: translate(-50%,-50%); z-index: 10; transition: top 0.3s, left 0.3s; cursor: pointer; }
+    .node-container:hover { z-index: 20; }
+    .node-container.dragging { transition: none; cursor: grabbing; z-index: 30; }
+    #connections-layer { position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
+
+    @keyframes flow { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } }
+    .animate-flow { animation: flow 1s linear infinite; }
+    @keyframes flow-reverse { 0% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 24; } }
+    .animate-flow-reverse { animation: flow-reverse 1s linear infinite; }
+
+    /* --- SIDEBAR PANELS --- */
+    #sidebar { width: 320px; background: rgba(15, 23, 42, 0.95); border-left: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; overflow: hidden; }
+    .sidebar-panel { display: flex; flex-direction: column; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .panel-header { padding: 12px 16px; background: rgba(255,255,255,0.03); font-weight: 700; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .panel-header:hover { background: rgba(255,255,255,0.05); }
+    .panel-content { padding: 12px 16px; overflow-y: auto; max-height: 300px; }
+    .panel-content::-webkit-scrollbar { width: 6px; }
+    .panel-content::-webkit-scrollbar-track { background: transparent; }
+    .panel-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+    /* --- TERMINAL PANEL --- */
+    #terminal-panel { flex: 1; display: flex; flex-direction: column; min-height: 200px; }
+    #terminal-container { flex: 1; background: #1a1a2e; padding: 8px; overflow: hidden; }
+    .terminal-tabs { display: flex; background: rgba(0,0,0,0.2); border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .terminal-tab { padding: 8px 16px; font-size: 12px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; }
+    .terminal-tab:hover { color: #94a3b8; background: rgba(255,255,255,0.03); }
+    .terminal-tab.active { color: #fff; border-bottom-color: #3b82f6; }
+    .terminal-tab .close-btn { opacity: 0; transition: opacity 0.2s; }
+    .terminal-tab:hover .close-btn { opacity: 1; }
+
+    /* --- HOST LIST --- */
+    .host-row { padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; border-radius: 6px; margin-bottom: 4px; background: rgba(0,0,0,0.2); transition: background 0.2s; }
+    .host-row:hover { background: rgba(255,255,255,0.05); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
+    .status-text { font-family: monospace; color: #64748b; font-size: 11px; }
+
+    /* --- TOOLBAR --- */
+    #toolbar { background: rgba(15, 23, 42, 0.95); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 8px 16px; display: flex; align-items: center; gap: 16px; }
+    .toolbar-btn { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); cursor: pointer; transition: all 0.2s; }
+    .toolbar-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    .toolbar-btn.active { background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; color: #60a5fa; }
+    .toolbar-divider { width: 1px; height: 24px; background: rgba(255,255,255,0.1); }
+
+    /* --- MODALS --- */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }
+    .modal { background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; width: 480px; max-height: 90vh; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { font-size: 16px; font-weight: 700; color: #fff; }
+    .modal-body { padding: 20px; }
+    .modal-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: flex-end; gap: 12px; }
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 6px; }
+    .form-input { width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-size: 14px; }
+    .form-input:focus { outline: none; border-color: #3b82f6; }
+    .btn { padding: 10px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #3b82f6; color: #fff; border: none; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: transparent; color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.05); color: #fff; }
+
+    /* --- NETWORK DISCOVERY --- */
+    .discovery-progress { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+    .discovery-progress-bar { height: 100%; background: #3b82f6; transition: width 0.3s; }
+    .discovered-host { padding: 8px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+
+    /* --- CONTEXT MENU --- */
+    .context-menu { position: fixed; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; min-width: 180px; z-index: 200; box-shadow: 0 10px 40px rgba(0,0,0,0.5); overflow: hidden; }
+    .context-menu-item { padding: 10px 14px; font-size: 13px; color: #e2e8f0; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+    .context-menu-item:hover { background: rgba(59, 130, 246, 0.2); }
+    .context-menu-item.danger:hover { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .context-menu-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 4px 0; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="app-container">
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <i data-lucide="network" class="w-5 h-5 text-blue-400"></i>
+      <span class="font-bold text-white">Network Topology</span>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <button class="toolbar-btn" id="btn-admin" title="Open Admin Panel">
+      <i data-lucide="settings" class="w-4 h-4"></i>
+      <span>Admin</span>
+    </button>
+
+    <button class="toolbar-btn" id="btn-discover" title="Discover Network Devices">
+      <i data-lucide="radar" class="w-4 h-4"></i>
+      <span>Discover</span>
+    </button>
+
+    <button class="toolbar-btn" id="btn-snap" title="Toggle Snap to Grid">
+      <i data-lucide="grid-3x3" class="w-4 h-4"></i>
+      <span>Snap to Grid</span>
+    </button>
+
+    <div class="toolbar-divider"></div>
+
+    <button class="toolbar-btn" id="btn-import" title="Import Configuration">
+      <i data-lucide="upload" class="w-4 h-4"></i>
+      <span>Import</span>
+    </button>
+
+    <button class="toolbar-btn" id="btn-export" title="Export Configuration">
+      <i data-lucide="download" class="w-4 h-4"></i>
+      <span>Export</span>
+    </button>
+
+    <div style="flex:1;"></div>
+
+    <div id="last-updated" class="text-xs text-slate-500 font-mono">Initializing...</div>
+
+    <button class="toolbar-btn" id="btn-monitoring" title="Toggle Monitoring">
+      <i data-lucide="activity" class="w-4 h-4"></i>
+      <span>Monitoring</span>
+    </button>
+  </div>
+
+  <div id="main-content">
+    <!-- Main Viewport -->
+    <div id="viewport-wrapper">
+      <div id="viewport">
+        <div id="world">
+          <div id="grid-layer" class="grid-bg"><div id="grid-labels"></div></div>
+          <svg id="connections-layer" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+          <div id="tree-container" style="position:absolute; inset:0; z-index:20; pointer-events:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <!-- Host Status Panel -->
+      <div class="sidebar-panel">
+        <div class="panel-header" onclick="togglePanel('host-list')">
+          <span><i data-lucide="server" class="w-4 h-4 inline mr-2"></i>Host Status</span>
+          <span id="host-count" class="text-xs bg-slate-800 px-2 py-0.5 rounded">0</span>
+        </div>
+        <div class="panel-content" id="host-list-content">
+          <!-- Rows injected here -->
+        </div>
+      </div>
+
+      <!-- Terminal Panel -->
+      <div id="terminal-panel" class="sidebar-panel">
+        <div class="panel-header">
+          <span><i data-lucide="terminal" class="w-4 h-4 inline mr-2"></i>SSH Terminal</span>
+          <span id="terminal-status" class="text-xs px-2 py-0.5 rounded bg-slate-700">No Connection</span>
+        </div>
+        <div class="terminal-tabs" id="terminal-tabs">
+          <!-- Terminal tabs injected here -->
+        </div>
+        <div id="terminal-container">
+          <div id="terminal-placeholder" class="h-full flex items-center justify-center text-slate-500 text-sm">
+            <div class="text-center">
+              <i data-lucide="terminal" class="w-8 h-8 mx-auto mb-2 opacity-50"></i>
+              <p>Right-click a node to open SSH</p>
+            </div>
+          </div>
+          <div id="terminal-instances"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SSH Connection Modal -->
+<div id="ssh-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h3><i data-lucide="terminal" class="w-5 h-5 inline mr-2"></i>SSH Connection</h3>
+      <button onclick="closeModal('ssh-modal')" class="text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Host</label>
+        <input type="text" id="ssh-host" class="form-input" placeholder="192.168.1.1" readonly>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Port</label>
+        <input type="number" id="ssh-port" class="form-input" placeholder="22" value="22">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input type="text" id="ssh-username" class="form-input" placeholder="root">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="ssh-password" class="form-input" placeholder="Enter password">
+      </div>
+      <input type="hidden" id="ssh-node-id">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('ssh-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="connectSSH()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Network Discovery Modal -->
+<div id="discovery-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h3><i data-lucide="radar" class="w-5 h-5 inline mr-2"></i>Network Discovery</h3>
+      <button onclick="closeModal('discovery-modal')" class="text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Network Interface</label>
+        <select id="discovery-interface" class="form-input">
+          <!-- Options populated dynamically -->
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">IP Range</label>
+        <div class="flex gap-2">
+          <input type="text" id="discovery-base" class="form-input" placeholder="192.168.1" style="width:60%">
+          <input type="number" id="discovery-start" class="form-input" placeholder="1" value="1" min="1" max="254" style="width:20%">
+          <span class="text-slate-400 self-center">-</span>
+          <input type="number" id="discovery-end" class="form-input" placeholder="254" value="254" min="1" max="254" style="width:20%">
+        </div>
+      </div>
+      <div id="discovery-status" class="text-sm text-slate-400 hidden">
+        <span id="discovery-text">Scanning...</span>
+        <div class="discovery-progress">
+          <div class="discovery-progress-bar" id="discovery-progress-bar" style="width: 0%"></div>
+        </div>
+      </div>
+      <div id="discovery-results" class="mt-4 max-h-48 overflow-y-auto hidden">
+        <!-- Discovered hosts here -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('discovery-modal')">Close</button>
+      <button class="btn btn-primary" id="btn-start-scan" onclick="startNetworkScan()">Start Scan</button>
+      <button class="btn btn-primary hidden" id="btn-add-discovered" onclick="addDiscoveredNodes()">Add Selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- Node Edit Modal -->
+<div id="node-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="node-modal-title"><i data-lucide="edit" class="w-5 h-5 inline mr-2"></i>Edit Node</h3>
+      <button onclick="closeModal('node-modal')" class="text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="node-name" class="form-input" placeholder="Device Name">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="form-group">
+          <label class="form-label">IP Address</label>
+          <input type="text" id="node-address" class="form-input" placeholder="192.168.1.1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Port (optional)</label>
+          <input type="number" id="node-port" class="form-input" placeholder="e.g. 80">
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="form-group">
+          <label class="form-label">Primary Parent</label>
+          <select id="node-primary-parent" class="form-input"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Failover Parent</label>
+          <select id="node-secondary-parent" class="form-input"></select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="form-group">
+          <label class="form-label">Icon Type</label>
+          <select id="node-icon-type" class="form-input">
+            <option value="lucide">Lucide Icon</option>
+            <option value="url">Image URL</option>
+            <option value="svg">SVG Code</option>
+          </select>
+        </div>
+        <div class="form-group col-span-2">
+          <label class="form-label">Icon</label>
+          <input type="text" id="node-icon" class="form-input" placeholder="router">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">SSH Credentials (optional)</label>
+        <div class="grid grid-cols-3 gap-2">
+          <input type="number" id="node-ssh-port" class="form-input" placeholder="SSH Port" value="22">
+          <input type="text" id="node-ssh-user" class="form-input" placeholder="Username">
+          <input type="password" id="node-ssh-pass" class="form-input" placeholder="Password">
+        </div>
+      </div>
+      <input type="hidden" id="node-edit-id">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('node-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNode()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context Menu -->
+<div id="context-menu" class="context-menu hidden">
+  <div class="context-menu-item" onclick="openSSHFromContext()">
+    <i data-lucide="terminal" class="w-4 h-4"></i>
+    <span>SSH Connect</span>
+  </div>
+  <div class="context-menu-item" onclick="editNodeFromContext()">
+    <i data-lucide="edit" class="w-4 h-4"></i>
+    <span>Edit Node</span>
+  </div>
+  <div class="context-menu-divider"></div>
+  <div class="context-menu-item" onclick="pingNodeFromContext()">
+    <i data-lucide="activity" class="w-4 h-4"></i>
+    <span>Ping</span>
+  </div>
+  <div class="context-menu-divider"></div>
+  <div class="context-menu-item danger" onclick="deleteNodeFromContext()">
+    <i data-lucide="trash-2" class="w-4 h-4"></i>
+    <span>Delete Node</span>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
