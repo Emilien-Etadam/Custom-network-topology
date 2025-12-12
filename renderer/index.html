@@ -27,10 +27,20 @@
     .grid-label { position: absolute; font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.2); pointer-events: none; display: flex; align-items: center; justify-content: center; }
 
     .card { background: rgba(30, 41, 59, 0.82); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.04); border-radius: 14px; }
-    .node-container { position: absolute; transform: translate(-50%,-50%); z-index: 10; transition: top 0.3s, left 0.3s; cursor: pointer; }
-    .node-container:hover { z-index: 20; }
-    .node-container.dragging { transition: none; cursor: grabbing; z-index: 30; }
+    .node-container { position: absolute; transform: translate(-50%,-50%); z-index: 10; cursor: pointer; will-change: left, top; }
+    .node-container:hover { z-index: 20; box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
+    .node-container.dragging {
+      cursor: grabbing;
+      z-index: 100;
+      box-shadow: 0 0 30px rgba(59, 130, 246, 0.5), 0 10px 40px rgba(0,0,0,0.4);
+      transform: translate(-50%,-50%) scale(1.05);
+    }
     #connections-layer { position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none; overflow:visible; }
+
+    /* Prevent interaction during drag */
+    body.dragging-node { cursor: grabbing !important; }
+    body.dragging-node * { cursor: grabbing !important; }
+    body.dragging-node #viewport { cursor: grabbing !important; }
 
     @keyframes flow { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } }
     .animate-flow { animation: flow 1s linear infinite; }
