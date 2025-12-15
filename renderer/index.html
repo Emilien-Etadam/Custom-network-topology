@@ -109,6 +109,64 @@
     .context-menu-item.danger:hover { background: rgba(239, 68, 68, 0.2); color: #f87171; }
     .context-menu-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 4px 0; }
 
+    /* --- PORT HANDLES (React Flow style) --- */
+    .node-ports { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+    .port-handle {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: #1e293b;
+      border: 2px solid #3b82f6;
+      border-radius: 50%;
+      cursor: crosshair;
+      pointer-events: auto;
+      transition: all 0.15s ease;
+      z-index: 30;
+    }
+    .port-handle:hover {
+      transform: scale(1.3);
+      background: #3b82f6;
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
+    }
+    .port-handle.connected {
+      background: #22c55e;
+      border-color: #22c55e;
+    }
+    .port-handle.port-top { top: -6px; left: 50%; transform: translateX(-50%); }
+    .port-handle.port-bottom { bottom: -6px; left: 50%; transform: translateX(-50%); }
+    .port-handle.port-left { left: -6px; top: 50%; transform: translateY(-50%); }
+    .port-handle.port-right { right: -6px; top: 50%; transform: translateY(-50%); }
+    .port-handle.port-top:hover { transform: translateX(-50%) scale(1.3); }
+    .port-handle.port-bottom:hover { transform: translateX(-50%) scale(1.3); }
+    .port-handle.port-left:hover { transform: translateY(-50%) scale(1.3); }
+    .port-handle.port-right:hover { transform: translateY(-50%) scale(1.3); }
+    .port-label {
+      position: absolute;
+      font-size: 9px;
+      font-family: monospace;
+      color: #94a3b8;
+      white-space: nowrap;
+      pointer-events: none;
+      background: rgba(15, 23, 42, 0.9);
+      padding: 2px 4px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .port-handle:hover + .port-label { opacity: 1; }
+    .port-top + .port-label { top: -22px; left: 50%; transform: translateX(-50%); }
+    .port-bottom + .port-label { bottom: -22px; left: 50%; transform: translateX(-50%); }
+    .port-left + .port-label { left: -60px; top: 50%; transform: translateY(-50%); }
+    .port-right + .port-label { right: -60px; top: 50%; transform: translateY(-50%); }
+
+    /* Multiple ports on same side */
+    .port-handle[data-index="0"].port-bottom { left: 30%; }
+    .port-handle[data-index="1"].port-bottom { left: 50%; }
+    .port-handle[data-index="2"].port-bottom { left: 70%; }
+    .port-handle[data-index="0"].port-top { left: 30%; }
+    .port-handle[data-index="1"].port-top { left: 50%; }
+    .port-handle[data-index="2"].port-top { left: 70%; }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -368,6 +426,13 @@
           <input type="text" id="node-ssh-user" class="form-input" placeholder="Username">
           <input type="password" id="node-ssh-pass" class="form-input" placeholder="Password">
         </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Ports / Interfaces</label>
+        <div id="node-ports-list" class="space-y-2 max-h-40 overflow-y-auto mb-2"></div>
+        <button type="button" onclick="addNodePort()" class="w-full py-2 border border-dashed border-slate-500 text-slate-400 rounded text-sm hover:border-blue-500 hover:text-blue-400 transition">
+          + Add Port
+        </button>
       </div>
       <input type="hidden" id="node-edit-id">
     </div>
