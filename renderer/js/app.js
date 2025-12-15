@@ -414,13 +414,17 @@ function startNodeDrag(e, node) {
   const viewport = document.getElementById('viewport');
   const viewportRect = viewport.getBoundingClientRect();
 
+  // Use vw/vh based dimensions for consistency with grid labels
+  const worldWidth = window.innerWidth;
+  const worldHeight = window.innerHeight;
+
   // Calculate mouse position relative to viewport, accounting for zoom/pan
   const mouseWorldX = (e.clientX - viewportRect.left - pointX) / scale;
   const mouseWorldY = (e.clientY - viewportRect.top - pointY) / scale;
 
-  // Store the offset between mouse and node center
-  const nodeX = (node.x || 50) / 100 * viewportRect.width;
-  const nodeY = (node.y || 50) / 100 * viewportRect.height;
+  // Store the offset between mouse and node center (using vh/vw units)
+  const nodeX = (node.x || 50) / 100 * worldWidth;
+  const nodeY = (node.y || 50) / 100 * worldHeight;
 
   dragOffsetX = mouseWorldX - nodeX;
   dragOffsetY = mouseWorldY - nodeY;
@@ -439,17 +443,21 @@ function handleNodeDrag(e) {
   const viewport = document.getElementById('viewport');
   const viewportRect = viewport.getBoundingClientRect();
 
+  // Use vw/vh based dimensions for consistency with grid labels
+  const worldWidth = window.innerWidth;
+  const worldHeight = window.innerHeight;
+
   // Calculate mouse position in world coordinates (accounting for zoom/pan)
   const mouseWorldX = (e.clientX - viewportRect.left - pointX) / scale;
   const mouseWorldY = (e.clientY - viewportRect.top - pointY) / scale;
 
   // Calculate new node position (subtract the initial offset)
-  let newX = ((mouseWorldX - dragOffsetX) / viewportRect.width) * 100;
-  let newY = ((mouseWorldY - dragOffsetY) / viewportRect.height) * 100;
+  let newX = ((mouseWorldX - dragOffsetX) / worldWidth) * 100;
+  let newY = ((mouseWorldY - dragOffsetY) / worldHeight) * 100;
 
-  // Clamp values to keep node within bounds
-  newX = Math.max(2, Math.min(98, newX));
-  newY = Math.max(2, Math.min(98, newY));
+  // Clamp values to keep node within bounds (allow full grid range)
+  newX = Math.max(1, Math.min(99, newX));
+  newY = Math.max(1, Math.min(250, newY)); // Grid extends to 250vh (50 rows * 5vh)
 
   // Apply snap-to-grid if enabled
   const snapped = snapToGrid(newX, newY);
