@@ -94,6 +94,7 @@
                             <th class="p-4 w-48">Node Name</th>
                             <th class="p-4 w-48">IP Address / Port</th>
                             <th class="p-4 w-56">Parents</th>
+                            <th class="p-4 w-40">Link</th>
                             <th class="p-4 w-48">SSH Credentials</th>
                             <th class="p-4 w-40">Icon</th>
                             <th class="p-4 w-16 text-center">Preview</th>
@@ -192,7 +193,9 @@
                 y: (h.y === null || h.y === '') ? null : h.y,
                 sshPort: h.sshPort || 22,
                 sshUser: h.sshUser || '',
-                sshPass: h.sshPass || ''
+                sshPass: h.sshPass || '',
+                linkType: h.linkType || null,
+                linkSpeed: h.linkSpeed || null
             };
         }
 
@@ -248,6 +251,30 @@
                                     ${createParentOptions(host.secondaryParentId)}
                                 </select>
                             </div>
+                        </div>
+                    </td>
+                    <td class="p-3 align-top">
+                        <div class="flex flex-col gap-1">
+                            <select onchange="update(${index}, 'linkType', this.value)"
+                                class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs outline-none cursor-pointer">
+                                <option value="" ${!host.linkType ? 'selected' : ''}>Type</option>
+                                <option value="RJ45" ${host.linkType === 'RJ45' ? 'selected' : ''}>RJ45</option>
+                                <option value="DAC" ${host.linkType === 'DAC' ? 'selected' : ''}>DAC</option>
+                                <option value="Fiber" ${host.linkType === 'Fiber' ? 'selected' : ''}>Fiber</option>
+                                <option value="WiFi" ${host.linkType === 'WiFi' ? 'selected' : ''}>WiFi</option>
+                            </select>
+                            <select onchange="update(${index}, 'linkSpeed', this.value)"
+                                class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs outline-none cursor-pointer">
+                                <option value="" ${!host.linkSpeed ? 'selected' : ''}>Speed</option>
+                                <option value="100M" ${host.linkSpeed === '100M' ? 'selected' : ''}>100M</option>
+                                <option value="1G" ${host.linkSpeed === '1G' ? 'selected' : ''}>1G</option>
+                                <option value="2.5G" ${host.linkSpeed === '2.5G' ? 'selected' : ''}>2.5G</option>
+                                <option value="5G" ${host.linkSpeed === '5G' ? 'selected' : ''}>5G</option>
+                                <option value="10G" ${host.linkSpeed === '10G' ? 'selected' : ''}>10G</option>
+                                <option value="25G" ${host.linkSpeed === '25G' ? 'selected' : ''}>25G</option>
+                                <option value="40G" ${host.linkSpeed === '40G' ? 'selected' : ''}>40G</option>
+                                <option value="100G" ${host.linkSpeed === '100G' ? 'selected' : ''}>100G</option>
+                            </select>
                         </div>
                     </td>
                     <td class="p-3 align-top">

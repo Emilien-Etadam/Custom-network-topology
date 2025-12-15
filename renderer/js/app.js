@@ -3,13 +3,17 @@
 // ============================================
 
 // State
-let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [] };
+let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [], connections: [] };
 let networkData = [];
 let terminals = new Map();
 let activeTerminal = null;
 let monitoringActive = false;
 let contextMenuNode = null;
 let uptimeTrackers = new Map();
+
+// Connection dragging state
+let isConnecting = false;
+let connectionStart = null; // { nodeId, portId, element }
 
 // Zoom/Pan Variables
 let scale = 1, pointX = 0, pointY = 0, isPanning = false, startX = 0, startY = 0;
@@ -59,12 +63,100 @@ async function loadConfig() {
     // Ensure settings exist
     config.settings = config.settings || { showGrid: true, gridSize: 100, snapToGrid: true };
     config.nodes = config.nodes || [];
+    config.connections = config.connections || [];
+
+    // Migrate legacy data and ensure ports exist
+    migrateAndInitializePorts();
 
     updateSnapButton();
     renderTree(config.nodes);
     renderHostList(config.nodes);
   } catch (error) {
     console.error('Failed to load config:', error);
+  }
+}
+
+// Migrate old primaryParentId/secondaryParentId to connections and ensure ports
+function migrateAndInitializePorts() {
+  let needsSave = false;
+
+  config.nodes.forEach(node => {
+    // Ensure node has ports array
+    if (!node.ports || node.ports.length === 0) {
+      node.ports = [
+        { id: `${node.id}_in`, name: 'IN', side: 'top' },
+        { id: `${node.id}_out`, name: 'OUT', side: 'bottom' }
+      ];
+      needsSave = true;
+    }
+
+    // Migrate legacy primaryParentId to connection
+    if (node.primaryParentId) {
+      const parentNode = config.nodes.find(n => n.id === node.primaryParentId);
+      if (parentNode) {
+        // Ensure parent has ports
+        if (!parentNode.ports || parentNode.ports.length === 0) {
+          parentNode.ports = [
+            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
+            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
+          ];
+        }
+
+        // Check if connection already exists
+        const existingConn = config.connections.find(c =>
+          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id
+        );
+
+        if (!existingConn) {
+          config.connections.push({
+            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            sourceNodeId: parentNode.id,
+            sourcePortId: `${parentNode.id}_out`,
+            targetNodeId: node.id,
+            targetPortId: `${node.id}_in`,
+            linkType: node.linkType || null,
+            linkSpeed: node.linkSpeed || null,
+            isFailover: false
+          });
+          needsSave = true;
+        }
+      }
+    }
+
+    // Migrate legacy secondaryParentId to failover connection
+    if (node.secondaryParentId) {
+      const parentNode = config.nodes.find(n => n.id === node.secondaryParentId);
+      if (parentNode) {
+        if (!parentNode.ports || parentNode.ports.length === 0) {
+          parentNode.ports = [
+            { id: `${parentNode.id}_in`, name: 'IN', side: 'top' },
+            { id: `${parentNode.id}_out`, name: 'OUT', side: 'bottom' }
+          ];
+        }
+
+        const existingConn = config.connections.find(c =>
+          c.sourceNodeId === parentNode.id && c.targetNodeId === node.id && c.isFailover
+        );
+
+        if (!existingConn) {
+          config.connections.push({
+            id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            sourceNodeId: parentNode.id,
+            sourcePortId: `${parentNode.id}_out`,
+            targetNodeId: node.id,
+            targetPortId: `${node.id}_in`,
+            linkType: null,
+            linkSpeed: null,
+            isFailover: true
+          });
+          needsSave = true;
+        }
+      }
+    }
+  });
+
+  if (needsSave) {
+    saveConfig();
   }
 }
 
@@ -313,7 +405,36 @@ function renderTree(nodes) {
 
     const gridCell = getGridCell(node.x || 50, node.y || 50);
 
+    // Render port handles
+    const ports = node.ports || [];
+    const portsByPosition = { top: [], bottom: [], left: [], right: [] };
+    ports.forEach(port => {
+      if (portsByPosition[port.side]) {
+        portsByPosition[port.side].push(port);
+      }
+    });
+
+    let portsHtml = '<div class="node-ports">';
+    Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
+      sidePorts.forEach((port, idx) => {
+        const isConnected = config.connections.some(c =>
+          (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
+          (c.targetNodeId === node.id && c.targetPortId === port.id)
+        );
+        portsHtml += `
+          <div class="port-handle port-${side} ${isConnected ? 'connected' : ''}"
+               data-node-id="${node.id}"
+               data-port-id="${port.id}"
+               data-index="${idx}"
+               title="${escapeHtml(port.name)}"></div>
+          <span class="port-label port-${side}">${escapeHtml(port.name)}</span>
+        `;
+      });
+    });
+    portsHtml += '</div>';
+
     el.innerHTML = `
+      ${portsHtml}
       <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:6px; padding:10px; box-sizing:border-box;">
         <div style="width:48px; height:48px; border-radius:999px; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.15); border:1px solid rgba(255,255,255,0.03); overflow:hidden;">
           ${iconHtml}
@@ -330,9 +451,18 @@ function renderTree(nodes) {
     `;
 
     // Event listeners for node interaction
-    el.addEventListener('mousedown', (e) => startNodeDrag(e, node));
+    el.addEventListener('mousedown', (e) => {
+      // Don't start node drag if clicking on a port
+      if (e.target.classList.contains('port-handle')) return;
+      startNodeDrag(e, node);
+    });
     el.addEventListener('contextmenu', (e) => showNodeContextMenu(e, node));
     el.addEventListener('dblclick', () => openNodeModal(node));
+
+    // Port event listeners
+    el.querySelectorAll('.port-handle').forEach(portEl => {
+      portEl.addEventListener('mousedown', (e) => startConnection(e, node, portEl));
+    });
 
     container.appendChild(el);
   });
@@ -348,36 +478,55 @@ function drawLines() {
   svg.setAttribute('height', '300%');
   svg.innerHTML = '';
 
-  networkData.forEach(node => {
-    if (!node.activeParentId) return;
-    const childEl = document.getElementById(`node-${node.id}`);
-    const parentEl = document.getElementById(`node-${node.activeParentId}`);
-    if (!childEl || !parentEl) return;
+  // Draw connections from config.connections array
+  config.connections.forEach(conn => {
+    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
+    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
+    if (!sourceNode || !targetNode) return;
 
-    const x1 = parentEl.offsetLeft;
-    const y1 = parentEl.offsetTop;
-    const x2 = childEl.offsetLeft;
-    const y2 = childEl.offsetTop;
+    const sourceEl = document.getElementById(`node-${conn.sourceNodeId}`);
+    const targetEl = document.getElementById(`node-${conn.targetNodeId}`);
+    if (!sourceEl || !targetEl) return;
 
-    const d = `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}`;
+    // Get port positions
+    const sourcePort = sourceNode.ports?.find(p => p.id === conn.sourcePortId);
+    const targetPort = targetNode.ports?.find(p => p.id === conn.targetPortId);
 
-    const isFailover = node.activeParentId === node.secondaryParentId && node.secondaryParentId !== null;
-    const baseColor = isFailover ? '#fbbf24' : (node.status ? '#22c55e' : '#ef4444');
+    // Calculate connection points based on port positions
+    const sourcePos = getPortPosition(sourceEl, sourcePort, sourceNode);
+    const targetPos = getPortPosition(targetEl, targetPort, targetNode);
 
+    const x1 = sourcePos.x;
+    const y1 = sourcePos.y;
+    const x2 = targetPos.x;
+    const y2 = targetPos.y;
+
+    // Create bezier curve path
+    const d = createBezierPath(x1, y1, x2, y2, sourcePort?.side || 'bottom', targetPort?.side || 'top');
+
+    // Determine connection status and color
+    const sourceData = networkData.find(n => n.id === conn.sourceNodeId);
+    const targetData = networkData.find(n => n.id === conn.targetNodeId);
+    const isOnline = sourceData?.status && targetData?.status;
+    const baseColor = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+
+    // Base path
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute('d', d);
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', baseColor);
-    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('stroke-width', '2');
     path.setAttribute('stroke-opacity', '0.4');
+    path.dataset.connectionId = conn.id;
     svg.appendChild(path);
 
-    if (node.status || isFailover) {
+    // Animated paths for active connections
+    if (isOnline || conn.isFailover) {
       const pathFwd = document.createElementNS("http://www.w3.org/2000/svg", "path");
       pathFwd.setAttribute('d', d);
       pathFwd.setAttribute('fill', 'none');
       pathFwd.setAttribute('stroke', baseColor);
-      pathFwd.setAttribute('stroke-width', '1.5');
+      pathFwd.setAttribute('stroke-width', '2');
       pathFwd.setAttribute('stroke-dasharray', '8 8');
       pathFwd.classList.add('animate-flow');
       svg.appendChild(pathFwd);
@@ -386,13 +535,209 @@ function drawLines() {
       pathRev.setAttribute('d', d);
       pathRev.setAttribute('fill', 'none');
       pathRev.setAttribute('stroke', baseColor);
-      pathRev.setAttribute('stroke-width', '1.5');
+      pathRev.setAttribute('stroke-width', '2');
       pathRev.setAttribute('stroke-dasharray', '8 8');
       pathRev.setAttribute('stroke-opacity', '0.6');
       pathRev.classList.add('animate-flow-reverse');
       svg.appendChild(pathRev);
     }
+
+    // Draw link speed/type label if available
+    if (conn.linkType || conn.linkSpeed) {
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+
+      let labelParts = [];
+      if (conn.linkType) labelParts.push(conn.linkType);
+      if (conn.linkSpeed) labelParts.push(conn.linkSpeed);
+      const labelText = labelParts.join(' ');
+
+      const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      const textWidth = labelText.length * 6 + 8;
+      textBg.setAttribute('x', midX - textWidth / 2);
+      textBg.setAttribute('y', midY - 8);
+      textBg.setAttribute('width', textWidth);
+      textBg.setAttribute('height', 16);
+      textBg.setAttribute('rx', 4);
+      textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
+      textBg.setAttribute('stroke', baseColor);
+      textBg.setAttribute('stroke-width', '1');
+      svg.appendChild(textBg);
+
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute('x', midX);
+      text.setAttribute('y', midY + 4);
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('fill', '#e2e8f0');
+      text.setAttribute('font-size', '10');
+      text.setAttribute('font-family', 'monospace');
+      text.setAttribute('font-weight', 'bold');
+      text.textContent = labelText;
+      svg.appendChild(text);
+    }
   });
+}
+
+// Get the pixel position of a port on a node
+function getPortPosition(nodeEl, port, node) {
+  const rect = nodeEl.getBoundingClientRect();
+  const nodeX = nodeEl.offsetLeft;
+  const nodeY = nodeEl.offsetTop;
+  const nodeW = nodeEl.offsetWidth;
+  const nodeH = nodeEl.offsetHeight;
+
+  // Get port index for positioning multiple ports on same side
+  const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
+  const portIndex = samePortSide.findIndex(p => p.id === port?.id);
+  const portCount = samePortSide.length;
+
+  // Calculate offset for multiple ports (spread them out)
+  let offsetRatio = 0.5;
+  if (portCount > 1) {
+    offsetRatio = (portIndex + 1) / (portCount + 1);
+  }
+
+  const side = port?.side || 'bottom';
+  switch (side) {
+    case 'top':
+      return { x: nodeX + nodeW * offsetRatio - nodeW / 2, y: nodeY - nodeH / 2 };
+    case 'bottom':
+      return { x: nodeX + nodeW * offsetRatio - nodeW / 2, y: nodeY + nodeH / 2 };
+    case 'left':
+      return { x: nodeX - nodeW / 2, y: nodeY + nodeH * offsetRatio - nodeH / 2 };
+    case 'right':
+      return { x: nodeX + nodeW / 2, y: nodeY + nodeH * offsetRatio - nodeH / 2 };
+    default:
+      return { x: nodeX, y: nodeY };
+  }
+}
+
+// Create a bezier path between two points, considering port sides
+function createBezierPath(x1, y1, x2, y2, sourceSide, targetSide) {
+  const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+  const curvature = Math.min(distance * 0.5, 100);
+
+  let cx1 = x1, cy1 = y1, cx2 = x2, cy2 = y2;
+
+  // Adjust control points based on port sides
+  switch (sourceSide) {
+    case 'top': cy1 = y1 - curvature; break;
+    case 'bottom': cy1 = y1 + curvature; break;
+    case 'left': cx1 = x1 - curvature; break;
+    case 'right': cx1 = x1 + curvature; break;
+  }
+
+  switch (targetSide) {
+    case 'top': cy2 = y2 - curvature; break;
+    case 'bottom': cy2 = y2 + curvature; break;
+    case 'left': cx2 = x2 - curvature; break;
+    case 'right': cx2 = x2 + curvature; break;
+  }
+
+  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+}
+
+// ============================================
+// Connection Drag & Drop
+// ============================================
+
+function startConnection(e, node, portEl) {
+  e.stopPropagation();
+  e.preventDefault();
+
+  isConnecting = true;
+  connectionStart = {
+    nodeId: node.id,
+    portId: portEl.dataset.portId,
+    element: portEl
+  };
+
+  // Add temporary line SVG
+  const svg = document.getElementById('connections-layer');
+  const tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  tempLine.id = 'temp-connection';
+  tempLine.setAttribute('fill', 'none');
+  tempLine.setAttribute('stroke', '#3b82f6');
+  tempLine.setAttribute('stroke-width', '2');
+  tempLine.setAttribute('stroke-dasharray', '5 5');
+  svg.appendChild(tempLine);
+
+  document.addEventListener('mousemove', handleConnectionDrag);
+  document.addEventListener('mouseup', endConnection);
+}
+
+function handleConnectionDrag(e) {
+  if (!isConnecting || !connectionStart) return;
+
+  const svg = document.getElementById('connections-layer');
+  const tempLine = document.getElementById('temp-connection');
+  if (!tempLine) return;
+
+  const sourceEl = document.getElementById(`node-${connectionStart.nodeId}`);
+  const sourceNode = config.nodes.find(n => n.id === connectionStart.nodeId);
+  const sourcePort = sourceNode?.ports?.find(p => p.id === connectionStart.portId);
+  const startPos = getPortPosition(sourceEl, sourcePort, sourceNode);
+
+  // Get mouse position relative to world
+  const worldRect = world.getBoundingClientRect();
+  const mouseX = (e.clientX - worldRect.left) / scale;
+  const mouseY = (e.clientY - worldRect.top) / scale;
+
+  const d = createBezierPath(startPos.x, startPos.y, mouseX, mouseY, sourcePort?.side || 'bottom', 'top');
+  tempLine.setAttribute('d', d);
+}
+
+function endConnection(e) {
+  document.removeEventListener('mousemove', handleConnectionDrag);
+  document.removeEventListener('mouseup', endConnection);
+
+  // Remove temp line
+  const tempLine = document.getElementById('temp-connection');
+  if (tempLine) tempLine.remove();
+
+  if (!isConnecting || !connectionStart) {
+    isConnecting = false;
+    connectionStart = null;
+    return;
+  }
+
+  // Check if we dropped on a port
+  const targetPort = e.target.closest('.port-handle');
+  if (targetPort && targetPort !== connectionStart.element) {
+    const targetNodeId = targetPort.dataset.nodeId;
+    const targetPortId = targetPort.dataset.portId;
+
+    // Don't connect to same node
+    if (targetNodeId !== connectionStart.nodeId) {
+      // Check if connection already exists
+      const existingConn = config.connections.find(c =>
+        (c.sourceNodeId === connectionStart.nodeId && c.sourcePortId === connectionStart.portId &&
+         c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) ||
+        (c.sourceNodeId === targetNodeId && c.sourcePortId === targetPortId &&
+         c.targetNodeId === connectionStart.nodeId && c.targetPortId === connectionStart.portId)
+      );
+
+      if (!existingConn) {
+        // Create new connection
+        config.connections.push({
+          id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          sourceNodeId: connectionStart.nodeId,
+          sourcePortId: connectionStart.portId,
+          targetNodeId: targetNodeId,
+          targetPortId: targetPortId,
+          linkType: null,
+          linkSpeed: null,
+          isFailover: false
+        });
+
+        saveConfig();
+        renderTree(config.nodes);
+      }
+    }
+  }
+
+  isConnecting = false;
+  connectionStart = null;
 }
 
 // ============================================
@@ -838,6 +1183,9 @@ function setupSSHListeners() {
 // Node Edit Modal
 // ============================================
 
+// Temporary ports storage for the modal
+let editingNodePorts = [];
+
 function openNodeModal(node = null) {
   const isNew = !node;
   document.getElementById('node-modal-title').innerHTML = isNew
@@ -853,6 +1201,21 @@ function openNodeModal(node = null) {
   document.getElementById('node-ssh-port').value = node && node.sshPort ? node.sshPort : 22;
   document.getElementById('node-ssh-user').value = node ? node.sshUser || '' : '';
   document.getElementById('node-ssh-pass').value = node ? node.sshPass || '' : '';
+  document.getElementById('node-link-type').value = node ? node.linkType || '' : '';
+  document.getElementById('node-link-speed').value = node ? node.linkSpeed || '' : '';
+
+  // Initialize ports
+  if (node && node.ports && node.ports.length > 0) {
+    editingNodePorts = JSON.parse(JSON.stringify(node.ports));
+  } else {
+    // Default ports for new nodes
+    const nodeId = node ? node.id : 'node_' + Date.now();
+    editingNodePorts = [
+      { id: `${nodeId}_in`, name: 'IN', side: 'top' },
+      { id: `${nodeId}_out`, name: 'OUT', side: 'bottom' }
+    ];
+  }
+  renderNodePortsList();
 
   // Populate parent dropdowns
   const primarySelect = document.getElementById('node-primary-parent');
@@ -876,6 +1239,55 @@ function openNodeModal(node = null) {
   openModal('node-modal');
 }
 
+function renderNodePortsList() {
+  const container = document.getElementById('node-ports-list');
+  container.innerHTML = '';
+
+  editingNodePorts.forEach((port, idx) => {
+    const div = document.createElement('div');
+    div.className = 'flex items-center gap-2 p-2 bg-slate-800 rounded';
+    div.innerHTML = `
+      <input type="text" value="${escapeHtml(port.name)}" placeholder="Name"
+             onchange="updateNodePort(${idx}, 'name', this.value)"
+             class="flex-1 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
+      <select onchange="updateNodePort(${idx}, 'side', this.value)"
+              class="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
+        <option value="top" ${port.side === 'top' ? 'selected' : ''}>Top</option>
+        <option value="bottom" ${port.side === 'bottom' ? 'selected' : ''}>Bottom</option>
+        <option value="left" ${port.side === 'left' ? 'selected' : ''}>Left</option>
+        <option value="right" ${port.side === 'right' ? 'selected' : ''}>Right</option>
+      </select>
+      <button onclick="removeNodePort(${idx})" class="p-1 text-red-400 hover:text-red-300">
+        <i data-lucide="trash-2" class="w-4 h-4"></i>
+      </button>
+    `;
+    container.appendChild(div);
+  });
+
+  lucide.createIcons();
+}
+
+function addNodePort() {
+  const nodeId = document.getElementById('node-edit-id').value || 'node_' + Date.now();
+  editingNodePorts.push({
+    id: `${nodeId}_port_${Date.now()}`,
+    name: `Port ${editingNodePorts.length + 1}`,
+    side: 'bottom'
+  });
+  renderNodePortsList();
+}
+
+function updateNodePort(idx, field, value) {
+  if (editingNodePorts[idx]) {
+    editingNodePorts[idx][field] = value;
+  }
+}
+
+function removeNodePort(idx) {
+  editingNodePorts.splice(idx, 1);
+  renderNodePortsList();
+}
+
 function saveNode() {
   const id = document.getElementById('node-edit-id').value;
   const name = document.getElementById('node-name').value;
@@ -888,14 +1300,24 @@ function saveNode() {
   const sshPort = document.getElementById('node-ssh-port').value;
   const sshUser = document.getElementById('node-ssh-user').value;
   const sshPass = document.getElementById('node-ssh-pass').value;
+  const linkType = document.getElementById('node-link-type').value || null;
+  const linkSpeed = document.getElementById('node-link-speed').value || null;
 
   if (!name) {
     alert('Name is required');
     return;
   }
 
+  const newNodeId = id || 'node_' + Date.now();
+
+  // Update port IDs if this is a new node
+  const ports = editingNodePorts.map(p => ({
+    ...p,
+    id: p.id.startsWith('node_') ? p.id : `${newNodeId}_${p.name.toLowerCase().replace(/\s+/g, '_')}`
+  }));
+
   const nodeData = {
-    id: id || 'node_' + Date.now(),
+    id: newNodeId,
     name,
     address,
     port: port ? parseInt(port) : null,
@@ -905,7 +1327,10 @@ function saveNode() {
     secondaryParentId,
     sshPort: sshPort ? parseInt(sshPort) : 22,
     sshUser,
-    sshPass
+    sshPass,
+    linkType,
+    linkSpeed,
+    ports
   };
 
   if (id) {
@@ -1175,6 +1600,9 @@ function setupMonitoringListener() {
         node.sshPort = configNode.sshPort;
         node.sshUser = configNode.sshUser;
         node.sshPass = configNode.sshPass;
+        node.linkType = configNode.linkType;
+        node.linkSpeed = configNode.linkSpeed;
+        node.ports = configNode.ports;
       }
 
       // Update uptime tracking
