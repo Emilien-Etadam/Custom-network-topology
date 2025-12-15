@@ -88,13 +88,12 @@
         <!-- Editor Table -->
         <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-xl">
             <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse min-w-[1400px]">
+                <table class="w-full text-left border-collapse min-w-[1100px]">
                     <thead class="bg-slate-900/50 text-slate-400 uppercase text-xs font-bold tracking-wider sticky top-0">
                         <tr>
                             <th class="p-4 w-48">Node Name</th>
                             <th class="p-4 w-48">IP Address / Port</th>
                             <th class="p-4 w-56">Parents</th>
-                            <th class="p-4 w-48">Grid Position</th>
                             <th class="p-4 w-48">SSH Credentials</th>
                             <th class="p-4 w-40">Icon</th>
                             <th class="p-4 w-16 text-center">Preview</th>
@@ -113,10 +112,10 @@
         </div>
 
         <!-- Help Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
             <div class="p-4 bg-blue-900/20 border border-blue-600/30 rounded-lg text-blue-200 text-sm">
-                <strong class="block mb-2 text-blue-400 flex items-center gap-2"><i data-lucide="grid-3x3" class="w-4 h-4"></i> Grid System</strong>
-                <p class="text-blue-300/80 text-xs">Grid extends from <strong>A to AZ</strong> (52 columns) and <strong>1-50</strong> rows. Use dropdowns for precise placement.</p>
+                <strong class="block mb-2 text-blue-400 flex items-center gap-2"><i data-lucide="move" class="w-4 h-4"></i> Positioning</strong>
+                <p class="text-blue-300/80 text-xs">Drag and drop nodes directly on the canvas to position them. Positions are saved automatically.</p>
             </div>
             <div class="p-4 bg-red-900/20 border border-red-600/30 rounded-lg text-red-200 text-sm">
                 <strong class="block mb-2 text-red-400 flex items-center gap-2"><i data-lucide="zap" class="w-4 h-4"></i> Failover</strong>
@@ -126,10 +125,6 @@
                 <strong class="block mb-2 text-green-400 flex items-center gap-2"><i data-lucide="terminal" class="w-4 h-4"></i> SSH Access</strong>
                 <p class="text-green-300/80 text-xs">Configure SSH credentials for quick terminal access from the topology viewer.</p>
             </div>
-            <div class="p-4 bg-purple-900/20 border border-purple-600/30 rounded-lg text-purple-200 text-sm">
-                <strong class="block mb-2 text-purple-400 flex items-center gap-2"><i data-lucide="image" class="w-4 h-4"></i> Custom Icons</strong>
-                <p class="text-purple-300/80 text-xs">Use Lucide icons, image URLs, or paste raw <code>&lt;svg&gt;</code> code.</p>
-            </div>
         </div>
     </div>
 
@@ -138,11 +133,6 @@
 
         let hosts = [];
         let settings = { showGrid: true, snapToGrid: true };
-
-        // Grid columns A-Z, AA-AZ
-        const gridCols = [];
-        for (let i = 0; i < 26; i++) gridCols.push(String.fromCharCode(65 + i));
-        for (let i = 0; i < 26; i++) gridCols.push('A' + String.fromCharCode(65 + i));
 
         // ============================================
         // Initialization
@@ -229,22 +219,6 @@
                     return options;
                 };
 
-                // Column options
-                let colOptions = `<option value="">Auto</option>`;
-                gridCols.forEach((char, i) => {
-                    const expectedX = (i * 5) + 2.5;
-                    const isSelected = (host.x !== null && Math.abs(host.x - expectedX) < 0.1);
-                    colOptions += `<option value="${char}" ${isSelected ? 'selected' : ''}>${char}</option>`;
-                });
-
-                // Row options
-                let rowOptions = `<option value="">Auto</option>`;
-                for (let i = 1; i <= 50; i++) {
-                    const expectedY = ((i - 1) * 5) + 2.5;
-                    const isSelected = (host.y !== null && Math.abs(host.y - expectedY) < 0.1);
-                    rowOptions += `<option value="${i}" ${isSelected ? 'selected' : ''}>${i}</option>`;
-                }
-
                 tr.innerHTML = `
                     <td class="p-3 align-top">
                         <input type="text" value="${escapeHtml(host.name)}" onchange="update(${index}, 'name', this.value)"
@@ -273,26 +247,6 @@
                                     class="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 flex-1 text-xs outline-none cursor-pointer">
                                     ${createParentOptions(host.secondaryParentId)}
                                 </select>
-                            </div>
-                        </div>
-                    </td>
-                    <td class="p-3 align-top bg-slate-800/30">
-                        <div class="flex flex-col gap-2">
-                            <div class="flex items-center gap-2">
-                                <span class="text-[10px] text-slate-400 w-8">Grid:</span>
-                                <select onchange="updateGridCol(${index}, this.value)"
-                                    class="bg-slate-700 border border-slate-500 rounded px-1 py-1 w-14 text-xs outline-none cursor-pointer">
-                                    ${colOptions}
-                                </select>
-                                <select onchange="updateGridRow(${index}, this.value)"
-                                    class="bg-slate-700 border border-slate-500 rounded px-1 py-1 w-14 text-xs outline-none cursor-pointer">
-                                    ${rowOptions}
-                                </select>
-                            </div>
-                            <div class="flex items-center gap-1 text-[10px] text-slate-500">
-                                <span>X: ${host.x !== null ? host.x.toFixed(1) + '%' : 'auto'}</span>
-                                <span class="mx-1">|</span>
-                                <span>Y: ${host.y !== null ? host.y.toFixed(1) + '%' : 'auto'}</span>
                             </div>
                         </div>
                     </td>
@@ -407,26 +361,6 @@
                 value = value === '' ? null : value;
             }
             hosts[index][field] = value;
-            render();
-        }
-
-        function updateGridCol(index, val) {
-            if (!val) {
-                hosts[index].x = null;
-            } else {
-                const colIndex = gridCols.indexOf(val);
-                hosts[index].x = (colIndex * 5) + 2.5;
-            }
-            render();
-        }
-
-        function updateGridRow(index, val) {
-            if (!val) {
-                hosts[index].y = null;
-            } else {
-                const rowNum = parseInt(val);
-                hosts[index].y = ((rowNum - 1) * 5) + 2.5;
-            }
             render();
         }
 
