@@ -157,6 +157,13 @@
     .port-label[style*="left: -6px"] { margin-left: -50px; }
     .port-label[style*="right: -6px"] { margin-right: -50px; right: auto; left: calc(100% + 8px); }
 
+    /* Selectable connections */
+    .connection-group { cursor: pointer; }
+    .connection-group:hover .connection-main { stroke-opacity: 0.7 !important; }
+    .connection-group.selected .connection-main { stroke: #f59e0b !important; stroke-opacity: 1 !important; stroke-width: 3px !important; }
+    .connection-group.selected .connection-animated { stroke: #f59e0b !important; }
+    .connection-hitbox { stroke: transparent; stroke-width: 20px; fill: none; pointer-events: stroke; cursor: pointer; }
+
     .hidden { display: none !important; }
   </style>
 </head>
