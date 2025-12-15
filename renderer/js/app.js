@@ -176,10 +176,10 @@ function setupEventListeners() {
     updateTransform();
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', async () => {
     isPanning = false;
     if (isDragging && dragNode) {
-      endNodeDrag();
+      await endNodeDrag();
     }
   });
 
@@ -219,9 +219,21 @@ function setupEventListeners() {
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
 
-  // Window resize
+  // Window resize - use networkData if monitoring, otherwise config
   window.addEventListener('resize', () => {
-    if (networkData.length) renderTree(networkData);
+    if (monitoringActive && networkData.length) {
+      // Merge positions from config before rendering
+      networkData.forEach(node => {
+        const configNode = config.nodes.find(n => n.id === node.id);
+        if (configNode) {
+          node.x = configNode.x;
+          node.y = configNode.y;
+        }
+      });
+      renderTree(networkData);
+    } else if (config.nodes.length) {
+      renderTree(config.nodes);
+    }
   });
 }
 
@@ -402,13 +414,17 @@ function startNodeDrag(e, node) {
   const viewport = document.getElementById('viewport');
   const viewportRect = viewport.getBoundingClientRect();
 
+  // Use vw/vh based dimensions for consistency with grid labels
+  const worldWidth = window.innerWidth;
+  const worldHeight = window.innerHeight;
+
   // Calculate mouse position relative to viewport, accounting for zoom/pan
   const mouseWorldX = (e.clientX - viewportRect.left - pointX) / scale;
   const mouseWorldY = (e.clientY - viewportRect.top - pointY) / scale;
 
-  // Store the offset between mouse and node center
-  const nodeX = (node.x || 50) / 100 * viewportRect.width;
-  const nodeY = (node.y || 50) / 100 * viewportRect.height;
+  // Store the offset between mouse and node center (using vh/vw units)
+  const nodeX = (node.x || 50) / 100 * worldWidth;
+  const nodeY = (node.y || 50) / 100 * worldHeight;
 
   dragOffsetX = mouseWorldX - nodeX;
   dragOffsetY = mouseWorldY - nodeY;
@@ -427,17 +443,21 @@ function handleNodeDrag(e) {
   const viewport = document.getElementById('viewport');
   const viewportRect = viewport.getBoundingClientRect();
 
+  // Use vw/vh based dimensions for consistency with grid labels
+  const worldWidth = window.innerWidth;
+  const worldHeight = window.innerHeight;
+
   // Calculate mouse position in world coordinates (accounting for zoom/pan)
   const mouseWorldX = (e.clientX - viewportRect.left - pointX) / scale;
   const mouseWorldY = (e.clientY - viewportRect.top - pointY) / scale;
 
   // Calculate new node position (subtract the initial offset)
-  let newX = ((mouseWorldX - dragOffsetX) / viewportRect.width) * 100;
-  let newY = ((mouseWorldY - dragOffsetY) / viewportRect.height) * 100;
+  let newX = ((mouseWorldX - dragOffsetX) / worldWidth) * 100;
+  let newY = ((mouseWorldY - dragOffsetY) / worldHeight) * 100;
 
-  // Clamp values to keep node within bounds
-  newX = Math.max(2, Math.min(98, newX));
-  newY = Math.max(2, Math.min(98, newY));
+  // Clamp values to keep node within bounds (allow full grid range)
+  newX = Math.max(1, Math.min(99, newX));
+  newY = Math.max(1, Math.min(250, newY)); // Grid extends to 250vh (50 rows * 5vh)
 
   // Apply snap-to-grid if enabled
   const snapped = snapToGrid(newX, newY);
@@ -455,7 +475,7 @@ function handleNodeDrag(e) {
   drawLines();
 }
 
-function endNodeDrag() {
+async function endNodeDrag() {
   if (!isDragging || !dragNode) return;
 
   const el = document.getElementById(`node-${dragNode.id}`);
@@ -467,25 +487,35 @@ function endNodeDrag() {
 
   // Save the position if it changed
   if (dragNode._tempX !== undefined) {
-    dragNode.x = dragNode._tempX;
-    dragNode.y = dragNode._tempY;
+    const newX = dragNode._tempX;
+    const newY = dragNode._tempY;
+
     delete dragNode._tempX;
     delete dragNode._tempY;
 
-    // Update config and networkData
-    const configNode = config.nodes.find(n => n.id === dragNode.id);
+    // Update ALL references to this node
+    const nodeId = dragNode.id;
+
+    // Update config.nodes (source of truth)
+    const configNode = config.nodes.find(n => n.id === nodeId);
     if (configNode) {
-      configNode.x = dragNode.x;
-      configNode.y = dragNode.y;
-      saveConfig();
+      configNode.x = newX;
+      configNode.y = newY;
     }
 
-    // Also update networkData if monitoring is active
-    const dataNode = networkData.find(n => n.id === dragNode.id);
+    // Update networkData if it exists
+    const dataNode = networkData.find(n => n.id === nodeId);
     if (dataNode) {
-      dataNode.x = dragNode.x;
-      dataNode.y = dragNode.y;
+      dataNode.x = newX;
+      dataNode.y = newY;
     }
+
+    // Update dragNode itself
+    dragNode.x = newX;
+    dragNode.y = newY;
+
+    // Save to disk and wait for completion
+    await saveConfig();
   }
 
   isDragging = false;
@@ -1057,7 +1087,7 @@ function renderDiscoveryResults() {
   });
 }
 
-function addDiscoveredNodes() {
+async function addDiscoveredNodes() {
   const selected = discoveredHosts.filter(h => h.selected);
   const startCount = config.nodes.length;
 
@@ -1081,8 +1111,16 @@ function addDiscoveredNodes() {
 
   saveConfig();
   closeModal('discovery-modal');
-  renderTree(config.nodes);
-  renderHostList(config.nodes);
+
+  // Restart monitoring with new nodes if it was active
+  if (monitoringActive) {
+    await stopMonitoring();
+    await startMonitoring();
+  } else {
+    // If monitoring is not active, just render from config
+    renderTree(config.nodes);
+    renderHostList(config.nodes);
+  }
 }
 
 // ============================================
@@ -1114,8 +1152,23 @@ function setupMonitoringListener() {
   window.electronAPI.monitor.onStatus((data) => {
     document.getElementById('last-updated').textContent = 'Last Update: ' + data.updated;
 
-    // Update uptime tracking
-    data.nodes.forEach(node => {
+    // Merge monitoring data with current config positions
+    // This preserves user-moved positions while updating status
+    const mergedNodes = data.nodes.map(node => {
+      const configNode = config.nodes.find(n => n.id === node.id);
+      if (configNode) {
+        // Use positions from config (user may have moved nodes)
+        node.x = configNode.x;
+        node.y = configNode.y;
+        // Also preserve other config properties
+        node.icon = configNode.icon;
+        node.iconType = configNode.iconType;
+        node.sshPort = configNode.sshPort;
+        node.sshUser = configNode.sshUser;
+        node.sshPass = configNode.sshPass;
+      }
+
+      // Update uptime tracking
       const tracker = uptimeTrackers.get(node.id);
       const currentStatus = node.status;
 
@@ -1132,9 +1185,11 @@ function setupMonitoringListener() {
       // Calculate uptime string
       const elapsed = Date.now() - (uptimeTrackers.get(node.id)?.since || Date.now());
       node.uptime = formatDuration(elapsed);
+
+      return node;
     });
 
-    networkData = data.nodes;
+    networkData = mergedNodes;
     renderTree(networkData);
     renderHostList(networkData);
   });
