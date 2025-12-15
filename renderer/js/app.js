@@ -440,6 +440,10 @@ function renderTree(nodes) {
       }
     });
 
+    // Determine if labels should always be visible (multiple ports or output ports)
+    const totalPorts = ports.length;
+    const hasMultiplePorts = totalPorts >= 2;
+
     let portsHtml = '<div class="node-ports">';
     Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
       const count = sidePorts.length;
@@ -467,6 +471,9 @@ function renderTree(nodes) {
           else posStyle += ' right: -6px;';
         }
 
+        // Show label permanently if: output port (bottom) OR multiple ports on node
+        const alwaysVisible = (side === 'bottom' || hasMultiplePorts) ? 'always-visible' : '';
+
         portsHtml += `
           <div class="port-handle ${isConnected ? 'connected' : ''}"
                style="${posStyle}"
@@ -475,7 +482,7 @@ function renderTree(nodes) {
                data-side="${side}"
                data-index="${idx}"
                title="${escapeHtml(port.name)}"></div>
-          <span class="port-label" style="${posStyle}">${escapeHtml(port.name)}</span>
+          <span class="port-label ${alwaysVisible}" style="${posStyle}">${escapeHtml(port.name)}</span>
         `;
       });
     });
@@ -614,40 +621,6 @@ function drawLines() {
     group.style.pointerEvents = 'auto';
 
     svg.appendChild(group);
-
-    // Draw link speed/type label if available
-    if (conn.linkType || conn.linkSpeed) {
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
-
-      let labelParts = [];
-      if (conn.linkType) labelParts.push(conn.linkType);
-      if (conn.linkSpeed) labelParts.push(conn.linkSpeed);
-      const labelText = labelParts.join(' ');
-
-      const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      const textWidth = labelText.length * 6 + 8;
-      textBg.setAttribute('x', midX - textWidth / 2);
-      textBg.setAttribute('y', midY - 8);
-      textBg.setAttribute('width', textWidth);
-      textBg.setAttribute('height', 16);
-      textBg.setAttribute('rx', 4);
-      textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
-      textBg.setAttribute('stroke', baseColor);
-      textBg.setAttribute('stroke-width', '1');
-      svg.appendChild(textBg);
-
-      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      text.setAttribute('x', midX);
-      text.setAttribute('y', midY + 4);
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('fill', '#e2e8f0');
-      text.setAttribute('font-size', '10');
-      text.setAttribute('font-family', 'monospace');
-      text.setAttribute('font-weight', 'bold');
-      text.textContent = labelText;
-      svg.appendChild(text);
-    }
 
     // Draw link speed/type label if available
     if (conn.linkType || conn.linkSpeed) {
@@ -911,190 +884,6 @@ function deleteSelectedConnection() {
       renderTree(config.nodes);
     }
   }
-}
-
-// Get the pixel position of a port on a node
-function getPortPosition(nodeEl, port, node) {
-  // Try to find the actual port element for precise positioning
-  if (port && port.id) {
-    const portEl = nodeEl.querySelector(`[data-port-id="${port.id}"]`);
-    if (portEl) {
-      // Get port element's center position relative to world
-      const portRect = portEl.getBoundingClientRect();
-      const worldRect = world.getBoundingClientRect();
-
-      // Calculate position in world coordinates (accounting for zoom/pan)
-      const x = (portRect.left + portRect.width / 2 - worldRect.left) / scale;
-      const y = (portRect.top + portRect.height / 2 - worldRect.top) / scale;
-
-      return { x, y };
-    }
-  }
-
-  // Fallback: calculate based on node position
-  const nodeW = nodeEl.offsetWidth;
-  const nodeH = nodeEl.offsetHeight;
-
-  // Node center (offsetLeft/Top is already the center due to CSS transform)
-  const nodeX = nodeEl.offsetLeft;
-  const nodeY = nodeEl.offsetTop;
-
-  // Get port index for positioning multiple ports on same side
-  const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
-  const portIndex = samePortSide.findIndex(p => p.id === port?.id);
-  const portCount = samePortSide.length;
-
-  // Calculate offset for multiple ports (spread them out) - match CSS percentages
-  let offsetPercent = 50;
-  if (portCount > 1) {
-    // CSS uses 30%, 50%, 70% for 3 ports
-    const positions = portCount === 2 ? [35, 65] :
-                      portCount === 3 ? [30, 50, 70] :
-                      Array.from({length: portCount}, (_, i) => 20 + (60 * i / (portCount - 1)));
-    offsetPercent = positions[portIndex] || 50;
-  }
-
-  const side = port?.side || 'bottom';
-  switch (side) {
-    case 'top':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY - nodeH / 2 };
-    case 'bottom':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY + nodeH / 2 };
-    case 'left':
-      return { x: nodeX - nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    case 'right':
-      return { x: nodeX + nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    default:
-      return { x: nodeX, y: nodeY };
-  }
-}
-
-// Create a bezier path between two points, considering port sides
-function createBezierPath(x1, y1, x2, y2, sourceSide, targetSide) {
-  const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-  const curvature = Math.min(distance * 0.5, 100);
-
-  let cx1 = x1, cy1 = y1, cx2 = x2, cy2 = y2;
-
-  // Adjust control points based on port sides
-  switch (sourceSide) {
-    case 'top': cy1 = y1 - curvature; break;
-    case 'bottom': cy1 = y1 + curvature; break;
-    case 'left': cx1 = x1 - curvature; break;
-    case 'right': cx1 = x1 + curvature; break;
-  }
-
-  switch (targetSide) {
-    case 'top': cy2 = y2 - curvature; break;
-    case 'bottom': cy2 = y2 + curvature; break;
-    case 'left': cx2 = x2 - curvature; break;
-    case 'right': cx2 = x2 + curvature; break;
-  }
-
-  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
-}
-
-// ============================================
-// Connection Drag & Drop
-// ============================================
-
-function startConnection(e, node, portEl) {
-  e.stopPropagation();
-  e.preventDefault();
-
-  isConnecting = true;
-  connectionStart = {
-    nodeId: node.id,
-    portId: portEl.dataset.portId,
-    element: portEl
-  };
-
-  // Add temporary line SVG
-  const svg = document.getElementById('connections-layer');
-  const tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  tempLine.id = 'temp-connection';
-  tempLine.setAttribute('fill', 'none');
-  tempLine.setAttribute('stroke', '#3b82f6');
-  tempLine.setAttribute('stroke-width', '2');
-  tempLine.setAttribute('stroke-dasharray', '5 5');
-  svg.appendChild(tempLine);
-
-  document.addEventListener('mousemove', handleConnectionDrag);
-  document.addEventListener('mouseup', endConnection);
-}
-
-function handleConnectionDrag(e) {
-  if (!isConnecting || !connectionStart) return;
-
-  const svg = document.getElementById('connections-layer');
-  const tempLine = document.getElementById('temp-connection');
-  if (!tempLine) return;
-
-  const sourceEl = document.getElementById(`node-${connectionStart.nodeId}`);
-  const sourceNode = config.nodes.find(n => n.id === connectionStart.nodeId);
-  const sourcePort = sourceNode?.ports?.find(p => p.id === connectionStart.portId);
-  const startPos = getPortPosition(sourceEl, sourcePort, sourceNode);
-
-  // Get mouse position relative to world
-  const worldRect = world.getBoundingClientRect();
-  const mouseX = (e.clientX - worldRect.left) / scale;
-  const mouseY = (e.clientY - worldRect.top) / scale;
-
-  const d = createBezierPath(startPos.x, startPos.y, mouseX, mouseY, sourcePort?.side || 'bottom', 'top');
-  tempLine.setAttribute('d', d);
-}
-
-function endConnection(e) {
-  document.removeEventListener('mousemove', handleConnectionDrag);
-  document.removeEventListener('mouseup', endConnection);
-
-  // Remove temp line
-  const tempLine = document.getElementById('temp-connection');
-  if (tempLine) tempLine.remove();
-
-  if (!isConnecting || !connectionStart) {
-    isConnecting = false;
-    connectionStart = null;
-    return;
-  }
-
-  // Check if we dropped on a port
-  const targetPort = e.target.closest('.port-handle');
-  if (targetPort && targetPort !== connectionStart.element) {
-    const targetNodeId = targetPort.dataset.nodeId;
-    const targetPortId = targetPort.dataset.portId;
-
-    // Don't connect to same node
-    if (targetNodeId !== connectionStart.nodeId) {
-      // Check if connection already exists
-      const existingConn = config.connections.find(c =>
-        (c.sourceNodeId === connectionStart.nodeId && c.sourcePortId === connectionStart.portId &&
-         c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) ||
-        (c.sourceNodeId === targetNodeId && c.sourcePortId === targetPortId &&
-         c.targetNodeId === connectionStart.nodeId && c.targetPortId === connectionStart.portId)
-      );
-
-      if (!existingConn) {
-        // Create new connection
-        config.connections.push({
-          id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          sourceNodeId: connectionStart.nodeId,
-          sourcePortId: connectionStart.portId,
-          targetNodeId: targetNodeId,
-          targetPortId: targetPortId,
-          linkType: null,
-          linkSpeed: null,
-          isFailover: false
-        });
-
-        saveConfig();
-        renderTree(config.nodes);
-      }
-    }
-  }
-
-  isConnecting = false;
-  connectionStart = null;
 }
 
 // ============================================

@@ -151,6 +151,8 @@
       z-index: 40;
     }
     .port-handle:hover + .port-label { opacity: 1; }
+    /* Always visible port labels (output ports or when multiple ports) */
+    .port-label.always-visible { opacity: 1; }
     /* Label positioning based on port side */
     .port-label[style*="top: -6px"] { margin-top: -20px; }
     .port-label[style*="bottom: -6px"] { margin-bottom: -20px; bottom: auto; top: calc(100% + 8px); }
