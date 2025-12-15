@@ -416,18 +416,40 @@ function renderTree(nodes) {
 
     let portsHtml = '<div class="node-ports">';
     Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
+      const count = sidePorts.length;
       sidePorts.forEach((port, idx) => {
         const isConnected = config.connections.some(c =>
           (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
           (c.targetNodeId === node.id && c.targetPortId === port.id)
         );
+
+        // Calculate position percentage for this port
+        let posPercent = 50;
+        if (count > 1) {
+          posPercent = ((idx + 1) / (count + 1)) * 100;
+        }
+
+        // Generate inline style for precise positioning
+        let posStyle = '';
+        if (side === 'top' || side === 'bottom') {
+          posStyle = `left: ${posPercent}%; transform: translateX(-50%);`;
+          if (side === 'top') posStyle += ' top: -6px;';
+          else posStyle += ' bottom: -6px;';
+        } else {
+          posStyle = `top: ${posPercent}%; transform: translateY(-50%);`;
+          if (side === 'left') posStyle += ' left: -6px;';
+          else posStyle += ' right: -6px;';
+        }
+
         portsHtml += `
-          <div class="port-handle port-${side} ${isConnected ? 'connected' : ''}"
+          <div class="port-handle ${isConnected ? 'connected' : ''}"
+               style="${posStyle}"
                data-node-id="${node.id}"
                data-port-id="${port.id}"
+               data-side="${side}"
                data-index="${idx}"
                title="${escapeHtml(port.name)}"></div>
-          <span class="port-label port-${side}">${escapeHtml(port.name)}</span>
+          <span class="port-label" style="${posStyle}">${escapeHtml(port.name)}</span>
         `;
       });
     });
@@ -580,33 +602,55 @@ function drawLines() {
 
 // Get the pixel position of a port on a node
 function getPortPosition(nodeEl, port, node) {
-  const rect = nodeEl.getBoundingClientRect();
-  const nodeX = nodeEl.offsetLeft;
-  const nodeY = nodeEl.offsetTop;
+  // Try to find the actual port element for precise positioning
+  if (port && port.id) {
+    const portEl = nodeEl.querySelector(`[data-port-id="${port.id}"]`);
+    if (portEl) {
+      // Get port element's center position relative to world
+      const portRect = portEl.getBoundingClientRect();
+      const worldRect = world.getBoundingClientRect();
+
+      // Calculate position in world coordinates (accounting for zoom/pan)
+      const x = (portRect.left + portRect.width / 2 - worldRect.left) / scale;
+      const y = (portRect.top + portRect.height / 2 - worldRect.top) / scale;
+
+      return { x, y };
+    }
+  }
+
+  // Fallback: calculate based on node position
   const nodeW = nodeEl.offsetWidth;
   const nodeH = nodeEl.offsetHeight;
+
+  // Node center (offsetLeft/Top is already the center due to CSS transform)
+  const nodeX = nodeEl.offsetLeft;
+  const nodeY = nodeEl.offsetTop;
 
   // Get port index for positioning multiple ports on same side
   const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
   const portIndex = samePortSide.findIndex(p => p.id === port?.id);
   const portCount = samePortSide.length;
 
-  // Calculate offset for multiple ports (spread them out)
-  let offsetRatio = 0.5;
+  // Calculate offset for multiple ports (spread them out) - match CSS percentages
+  let offsetPercent = 50;
   if (portCount > 1) {
-    offsetRatio = (portIndex + 1) / (portCount + 1);
+    // CSS uses 30%, 50%, 70% for 3 ports
+    const positions = portCount === 2 ? [35, 65] :
+                      portCount === 3 ? [30, 50, 70] :
+                      Array.from({length: portCount}, (_, i) => 20 + (60 * i / (portCount - 1)));
+    offsetPercent = positions[portIndex] || 50;
   }
 
   const side = port?.side || 'bottom';
   switch (side) {
     case 'top':
-      return { x: nodeX + nodeW * offsetRatio - nodeW / 2, y: nodeY - nodeH / 2 };
+      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY - nodeH / 2 };
     case 'bottom':
-      return { x: nodeX + nodeW * offsetRatio - nodeW / 2, y: nodeY + nodeH / 2 };
+      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY + nodeH / 2 };
     case 'left':
-      return { x: nodeX - nodeW / 2, y: nodeY + nodeH * offsetRatio - nodeH / 2 };
+      return { x: nodeX - nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
     case 'right':
-      return { x: nodeX + nodeW / 2, y: nodeY + nodeH * offsetRatio - nodeH / 2 };
+      return { x: nodeX + nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
     default:
       return { x: nodeX, y: nodeY };
   }
