@@ -176,10 +176,10 @@ function setupEventListeners() {
     updateTransform();
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', async () => {
     isPanning = false;
     if (isDragging && dragNode) {
-      endNodeDrag();
+      await endNodeDrag();
     }
   });
 
@@ -219,9 +219,21 @@ function setupEventListeners() {
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
 
-  // Window resize
+  // Window resize - use networkData if monitoring, otherwise config
   window.addEventListener('resize', () => {
-    if (networkData.length) renderTree(networkData);
+    if (monitoringActive && networkData.length) {
+      // Merge positions from config before rendering
+      networkData.forEach(node => {
+        const configNode = config.nodes.find(n => n.id === node.id);
+        if (configNode) {
+          node.x = configNode.x;
+          node.y = configNode.y;
+        }
+      });
+      renderTree(networkData);
+    } else if (config.nodes.length) {
+      renderTree(config.nodes);
+    }
   });
 }
 
@@ -455,7 +467,7 @@ function handleNodeDrag(e) {
   drawLines();
 }
 
-function endNodeDrag() {
+async function endNodeDrag() {
   if (!isDragging || !dragNode) return;
 
   const el = document.getElementById(`node-${dragNode.id}`);
@@ -467,25 +479,35 @@ function endNodeDrag() {
 
   // Save the position if it changed
   if (dragNode._tempX !== undefined) {
-    dragNode.x = dragNode._tempX;
-    dragNode.y = dragNode._tempY;
+    const newX = dragNode._tempX;
+    const newY = dragNode._tempY;
+
     delete dragNode._tempX;
     delete dragNode._tempY;
 
-    // Update config and networkData
-    const configNode = config.nodes.find(n => n.id === dragNode.id);
+    // Update ALL references to this node
+    const nodeId = dragNode.id;
+
+    // Update config.nodes (source of truth)
+    const configNode = config.nodes.find(n => n.id === nodeId);
     if (configNode) {
-      configNode.x = dragNode.x;
-      configNode.y = dragNode.y;
-      saveConfig();
+      configNode.x = newX;
+      configNode.y = newY;
     }
 
-    // Also update networkData if monitoring is active
-    const dataNode = networkData.find(n => n.id === dragNode.id);
+    // Update networkData if it exists
+    const dataNode = networkData.find(n => n.id === nodeId);
     if (dataNode) {
-      dataNode.x = dragNode.x;
-      dataNode.y = dragNode.y;
+      dataNode.x = newX;
+      dataNode.y = newY;
     }
+
+    // Update dragNode itself
+    dragNode.x = newX;
+    dragNode.y = newY;
+
+    // Save to disk and wait for completion
+    await saveConfig();
   }
 
   isDragging = false;
