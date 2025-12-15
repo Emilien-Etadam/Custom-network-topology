@@ -123,7 +123,7 @@ function snapToGrid(x, y) {
 
   return {
     x: Math.max(2.5, Math.min(97.5, snappedX)),
-    y: Math.max(2.5, Math.min(97.5, snappedY))
+    y: Math.max(2.5, Math.min(247.5, snappedY)) // 50 rows * 5% = 250%, center at 247.5
   };
 }
 
