@@ -294,17 +294,20 @@ function setupEventListeners() {
 
   // Keyboard events for connection deletion
   document.addEventListener('keydown', (e) => {
+    // Check if user is typing in an input field
+    const isTyping = e.target.tagName === 'INPUT' ||
+                     e.target.tagName === 'TEXTAREA' ||
+                     e.target.tagName === 'SELECT' ||
+                     e.target.isContentEditable ||
+                     e.target.closest('.modal');
+
     // Delete selected connection with Delete or Backspace key
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId) {
-      // Don't delete if focus is on an input element
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
-        return;
-      }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId && !isTyping) {
       e.preventDefault();
       deleteSelectedConnection();
     }
-    // Escape to deselect
-    if (e.key === 'Escape') {
+    // Escape to deselect (but not when in modal)
+    if (e.key === 'Escape' && !e.target.closest('.modal')) {
       deselectConnection();
     }
   });
