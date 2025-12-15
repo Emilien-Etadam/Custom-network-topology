@@ -930,6 +930,11 @@ function saveNode() {
   closeModal('node-modal');
   renderTree(config.nodes);
   renderHostList(config.nodes);
+
+  // Restart monitoring with updated config
+  if (monitoringActive) {
+    stopMonitoring().then(() => startMonitoring());
+  }
 }
 
 // ============================================
@@ -1157,10 +1162,14 @@ function setupMonitoringListener() {
     const mergedNodes = data.nodes.map(node => {
       const configNode = config.nodes.find(n => n.id === node.id);
       if (configNode) {
-        // Use positions from config (user may have moved nodes)
+        // Use ALL properties from config (user may have edited the node)
+        node.name = configNode.name;
+        node.address = configNode.address;
+        node.port = configNode.port;
+        node.primaryParentId = configNode.primaryParentId;
+        node.secondaryParentId = configNode.secondaryParentId;
         node.x = configNode.x;
         node.y = configNode.y;
-        // Also preserve other config properties
         node.icon = configNode.icon;
         node.iconType = configNode.iconType;
         node.sshPort = configNode.sshPort;
