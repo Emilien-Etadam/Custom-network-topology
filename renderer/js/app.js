@@ -392,6 +392,43 @@ function drawLines() {
       pathRev.classList.add('animate-flow-reverse');
       svg.appendChild(pathRev);
     }
+
+    // Draw link speed/type label if available
+    if (node.linkType || node.linkSpeed) {
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+
+      // Build label text
+      let labelParts = [];
+      if (node.linkType) labelParts.push(node.linkType);
+      if (node.linkSpeed) labelParts.push(node.linkSpeed);
+      const labelText = labelParts.join(' ');
+
+      // Background rect for better readability
+      const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      const textWidth = labelText.length * 6 + 8;
+      textBg.setAttribute('x', midX - textWidth / 2);
+      textBg.setAttribute('y', midY - 8);
+      textBg.setAttribute('width', textWidth);
+      textBg.setAttribute('height', 16);
+      textBg.setAttribute('rx', 4);
+      textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
+      textBg.setAttribute('stroke', baseColor);
+      textBg.setAttribute('stroke-width', '1');
+      svg.appendChild(textBg);
+
+      // Label text
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute('x', midX);
+      text.setAttribute('y', midY + 4);
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('fill', '#e2e8f0');
+      text.setAttribute('font-size', '10');
+      text.setAttribute('font-family', 'monospace');
+      text.setAttribute('font-weight', 'bold');
+      text.textContent = labelText;
+      svg.appendChild(text);
+    }
   });
 }
 
@@ -853,6 +890,8 @@ function openNodeModal(node = null) {
   document.getElementById('node-ssh-port').value = node && node.sshPort ? node.sshPort : 22;
   document.getElementById('node-ssh-user').value = node ? node.sshUser || '' : '';
   document.getElementById('node-ssh-pass').value = node ? node.sshPass || '' : '';
+  document.getElementById('node-link-type').value = node ? node.linkType || '' : '';
+  document.getElementById('node-link-speed').value = node ? node.linkSpeed || '' : '';
 
   // Populate parent dropdowns
   const primarySelect = document.getElementById('node-primary-parent');
@@ -888,6 +927,8 @@ function saveNode() {
   const sshPort = document.getElementById('node-ssh-port').value;
   const sshUser = document.getElementById('node-ssh-user').value;
   const sshPass = document.getElementById('node-ssh-pass').value;
+  const linkType = document.getElementById('node-link-type').value || null;
+  const linkSpeed = document.getElementById('node-link-speed').value || null;
 
   if (!name) {
     alert('Name is required');
@@ -905,7 +946,9 @@ function saveNode() {
     secondaryParentId,
     sshPort: sshPort ? parseInt(sshPort) : 22,
     sshUser,
-    sshPass
+    sshPass,
+    linkType,
+    linkSpeed
   };
 
   if (id) {
@@ -1175,6 +1218,8 @@ function setupMonitoringListener() {
         node.sshPort = configNode.sshPort;
         node.sshUser = configNode.sshUser;
         node.sshPass = configNode.sshPass;
+        node.linkType = configNode.linkType;
+        node.linkSpeed = configNode.linkSpeed;
       }
 
       // Update uptime tracking
