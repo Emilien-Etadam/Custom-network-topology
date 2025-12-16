@@ -11,6 +11,10 @@ let monitoringActive = false;
 let contextMenuNode = null;
 let uptimeTrackers = new Map();
 
+// Status history tracking
+let statusHistory = new Map(); // nodeId -> { lastStatus, lastChange, history: [{status, time}] }
+const MAX_HISTORY_ENTRIES = 50;
+
 // Connection dragging state
 let isConnecting = false;
 let connectionStart = null; // { nodeId, portId, element }
@@ -339,6 +343,10 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
+
+  // Search and filter
+  document.getElementById('node-search').addEventListener('input', applyNodeFilter);
+  document.getElementById('node-filter-status').addEventListener('change', applyNodeFilter);
 
   // Window resize - use networkData if monitoring, otherwise config
   window.addEventListener('resize', () => {
@@ -1055,6 +1063,119 @@ function renderHostList(nodes) {
     `;
   });
   list.innerHTML = html;
+
+  // Add click handlers to focus on node
+  list.querySelectorAll('.host-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const nodeId = row.dataset.nodeId;
+      focusOnNode(nodeId);
+    });
+  });
+}
+
+function applyNodeFilter() {
+  const searchTerm = document.getElementById('node-search').value.toLowerCase().trim();
+  const statusFilter = document.getElementById('node-filter-status').value;
+
+  // Get nodes from monitoring data if active, otherwise from config
+  const sourceNodes = monitoringActive && networkData.length ? networkData : config.nodes;
+
+  // Filter nodes
+  const filteredNodes = sourceNodes.filter(node => {
+    // Search filter (name or address)
+    const matchesSearch = !searchTerm ||
+      (node.name && node.name.toLowerCase().includes(searchTerm)) ||
+      (node.address && node.address.toLowerCase().includes(searchTerm));
+
+    // Status filter
+    let matchesStatus = true;
+    if (statusFilter === 'online') {
+      matchesStatus = node.status === true;
+    } else if (statusFilter === 'offline') {
+      matchesStatus = node.status === false || node.status === undefined;
+    }
+
+    return matchesSearch && matchesStatus;
+  });
+
+  // Update host list with filtered nodes
+  renderHostList(filteredNodes);
+
+  // Update host count to show filtered/total
+  const countEl = document.getElementById('host-count');
+  if (searchTerm || statusFilter !== 'all') {
+    countEl.innerText = `${filteredNodes.length}/${sourceNodes.length}`;
+  } else {
+    countEl.innerText = sourceNodes.length;
+  }
+
+  // Highlight matching nodes in viewport
+  highlightFilteredNodes(filteredNodes.map(n => n.id));
+}
+
+function highlightFilteredNodes(matchingIds) {
+  const searchTerm = document.getElementById('node-search').value.trim();
+  const statusFilter = document.getElementById('node-filter-status').value;
+  const isFiltering = searchTerm || statusFilter !== 'all';
+
+  document.querySelectorAll('.node-container').forEach(el => {
+    const nodeId = el.id.replace('node-', '');
+    if (isFiltering) {
+      if (matchingIds.includes(nodeId)) {
+        el.style.opacity = '1';
+        el.style.filter = 'none';
+      } else {
+        el.style.opacity = '0.3';
+        el.style.filter = 'grayscale(50%)';
+      }
+    } else {
+      el.style.opacity = '1';
+      el.style.filter = 'none';
+    }
+  });
+}
+
+function focusOnNode(nodeId) {
+  const node = config.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+
+  const el = document.getElementById(`node-${nodeId}`);
+  if (!el) return;
+
+  // Calculate position to center the node
+  const viewportRect = viewport.getBoundingClientRect();
+  const targetX = viewportRect.width / 2 - (node.x / 100 * 10000) * scale;
+  const targetY = viewportRect.height / 2 - (node.y / 100 * 10000) * scale;
+
+  // Animate pan to node
+  const startX = pointX;
+  const startY = pointY;
+  const duration = 300;
+  const startTime = performance.now();
+
+  function animate(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+
+    pointX = startX + (targetX - startX) * eased;
+    pointY = startY + (targetY - startY) * eased;
+    updateTransform();
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      // Flash highlight effect
+      el.style.transition = 'box-shadow 0.2s';
+      el.style.boxShadow = '0 0 20px 10px rgba(59, 130, 246, 0.6)';
+      setTimeout(() => {
+        el.style.boxShadow = '';
+        setTimeout(() => { el.style.transition = ''; }, 200);
+      }, 500);
+    }
+  }
+
+  requestAnimationFrame(animate);
 }
 
 // ============================================
@@ -1102,6 +1223,34 @@ async function pingNodeFromContext() {
   }
 }
 
+function showStatusHistoryFromContext() {
+  if (!contextMenuNode) return;
+  hideContextMenu();
+
+  const history = statusHistory.get(contextMenuNode.id);
+  const nodeName = contextMenuNode.name || contextMenuNode.id;
+
+  if (!history || history.history.length === 0) {
+    toastInfo('Status History', `No history available for "${nodeName}". Start monitoring to track status.`);
+    return;
+  }
+
+  // Build history message
+  const lastChange = getLastStatusChange(contextMenuNode.id);
+  let message = `Current: ${lastChange.status ? 'Online' : 'Offline'} for ${lastChange.duration}\n\n`;
+  message += 'Recent changes:\n';
+
+  const recent = history.history.slice(-5).reverse();
+  recent.forEach(entry => {
+    const time = new Date(entry.time).toLocaleString();
+    const status = entry.status ? '🟢 Online' : '🔴 Offline';
+    message += `• ${time}: ${status}\n`;
+  });
+
+  // Show as alert for now (could be improved with a modal)
+  alert(`Status History for "${nodeName}"\n\n${message}`);
+}
+
 function deleteNodeFromContext() {
   if (!contextMenuNode) return;
   hideContextMenu();
@@ -1140,7 +1289,42 @@ function openSSHModal(node) {
   document.getElementById('ssh-username').value = node.sshUser || '';
   document.getElementById('ssh-password').value = node.sshPass || '';
   document.getElementById('ssh-node-id').value = node.id;
+
+  // Reset auth type and fields
+  document.getElementById('ssh-auth-type').value = 'password';
+  document.getElementById('ssh-key-path').value = '';
+  document.getElementById('ssh-passphrase').value = '';
+  toggleSSHAuthFields();
+
   openModal('ssh-modal');
+  lucide.createIcons();
+}
+
+function toggleSSHAuthFields() {
+  const authType = document.getElementById('ssh-auth-type').value;
+  const passwordGroup = document.getElementById('ssh-password-group');
+  const keyGroup = document.getElementById('ssh-key-group');
+
+  if (authType === 'password') {
+    passwordGroup.classList.remove('hidden');
+    keyGroup.classList.add('hidden');
+  } else {
+    passwordGroup.classList.add('hidden');
+    keyGroup.classList.remove('hidden');
+  }
+}
+
+async function browseSSHKey() {
+  if (!window.electronAPI) {
+    toastWarning('Not Available', 'File browsing is only available in the desktop application');
+    return;
+  }
+
+  const result = await window.electronAPI.ssh.browseKey();
+  if (result.success) {
+    document.getElementById('ssh-key-path').value = result.path;
+    toastInfo('Key Selected', `Selected: ${result.path.split(/[\\/]/).pop()}`);
+  }
 }
 
 async function connectSSH() {
@@ -1153,11 +1337,34 @@ async function connectSSH() {
   const host = document.getElementById('ssh-host').value;
   const port = parseInt(document.getElementById('ssh-port').value) || 22;
   const username = document.getElementById('ssh-username').value;
-  const password = document.getElementById('ssh-password').value;
+  const authType = document.getElementById('ssh-auth-type').value;
 
   if (!host || !username) {
     toastError('Missing Credentials', 'Host and username are required');
     return;
+  }
+
+  // Build connection info based on auth type
+  const connectionInfo = { nodeId, host, port, username };
+
+  if (authType === 'password') {
+    const password = document.getElementById('ssh-password').value;
+    if (!password) {
+      toastError('Missing Password', 'Password is required');
+      return;
+    }
+    connectionInfo.password = password;
+  } else {
+    const keyPath = document.getElementById('ssh-key-path').value;
+    if (!keyPath) {
+      toastError('Missing Key', 'Private key file is required');
+      return;
+    }
+    connectionInfo.privateKeyPath = keyPath;
+    const passphrase = document.getElementById('ssh-passphrase').value;
+    if (passphrase) {
+      connectionInfo.passphrase = passphrase;
+    }
   }
 
   closeModal('ssh-modal');
@@ -1166,13 +1373,7 @@ async function connectSSH() {
   document.getElementById('terminal-status').textContent = 'Connecting...';
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
-  const result = await window.electronAPI.ssh.connect({
-    nodeId,
-    host,
-    port,
-    username,
-    password
-  });
+  const result = await window.electronAPI.ssh.connect(connectionInfo);
 
   if (result.success) {
     document.getElementById('terminal-status').textContent = 'Connected';
@@ -1800,6 +2001,9 @@ function setupMonitoringListener() {
       const elapsed = Date.now() - (uptimeTrackers.get(node.id)?.since || Date.now());
       node.uptime = formatDuration(elapsed);
 
+      // Track status history
+      trackStatusChange(node.id, node.name, currentStatus);
+
       return node;
     });
 
@@ -1846,6 +2050,78 @@ function formatDuration(ms) {
   if (hours < 24) return hours + 'h ' + (minutes % 60) + 'm';
   const days = Math.floor(hours / 24);
   return days + 'd ' + (hours % 24) + 'h';
+}
+
+// ============================================
+// Status History Tracking
+// ============================================
+
+function trackStatusChange(nodeId, nodeName, newStatus) {
+  const now = Date.now();
+  let nodeHistory = statusHistory.get(nodeId);
+
+  if (!nodeHistory) {
+    // First time seeing this node
+    nodeHistory = {
+      lastStatus: newStatus,
+      lastChange: now,
+      history: [{ status: newStatus, time: now }]
+    };
+    statusHistory.set(nodeId, nodeHistory);
+    return;
+  }
+
+  // Check if status changed
+  if (nodeHistory.lastStatus !== newStatus) {
+    // Status changed! Record it
+    nodeHistory.history.push({ status: newStatus, time: now });
+
+    // Keep only last N entries
+    if (nodeHistory.history.length > MAX_HISTORY_ENTRIES) {
+      nodeHistory.history = nodeHistory.history.slice(-MAX_HISTORY_ENTRIES);
+    }
+
+    // Show toast notification for status change
+    if (newStatus) {
+      toastSuccess('Node Online', `"${nodeName}" is now online`);
+    } else {
+      toastError('Node Offline', `"${nodeName}" went offline`);
+    }
+
+    nodeHistory.lastStatus = newStatus;
+    nodeHistory.lastChange = now;
+  }
+}
+
+function getNodeStatusHistory(nodeId) {
+  return statusHistory.get(nodeId) || null;
+}
+
+function formatStatusHistory(nodeId) {
+  const history = statusHistory.get(nodeId);
+  if (!history || history.history.length === 0) {
+    return 'No history available';
+  }
+
+  // Get last 5 status changes
+  const recent = history.history.slice(-5).reverse();
+  return recent.map(entry => {
+    const time = new Date(entry.time).toLocaleTimeString();
+    const status = entry.status ? '🟢 Online' : '🔴 Offline';
+    return `${time}: ${status}`;
+  }).join('\n');
+}
+
+function getLastStatusChange(nodeId) {
+  const history = statusHistory.get(nodeId);
+  if (!history) return null;
+
+  const timeSince = Date.now() - history.lastChange;
+  return {
+    status: history.lastStatus,
+    since: history.lastChange,
+    duration: formatDuration(timeSince)
+  };
 }
 
 // ============================================

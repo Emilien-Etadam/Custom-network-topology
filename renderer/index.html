@@ -230,6 +230,10 @@
     }
     .toast-close:hover { background: rgba(255,255,255,0.1); color: #fff; }
 
+    /* Clickable host rows */
+    .host-row { cursor: pointer; transition: background 0.15s; }
+    .host-row:hover { background: rgba(59, 130, 246, 0.1); }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -271,6 +275,23 @@
       <i data-lucide="download" class="w-4 h-4"></i>
       <span>Export</span>
     </button>
+
+    <div class="toolbar-divider"></div>
+
+    <!-- Search and Filter -->
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div style="position: relative;">
+        <i data-lucide="search" class="w-4 h-4" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #64748b; pointer-events: none;"></i>
+        <input type="text" id="node-search" placeholder="Search nodes..."
+               style="padding: 6px 10px 6px 32px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; width: 160px; outline: none;"
+               onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'">
+      </div>
+      <select id="node-filter-status" style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: #fff; font-size: 12px; outline: none; cursor: pointer;">
+        <option value="all">All Status</option>
+        <option value="online">Online</option>
+        <option value="offline">Offline</option>
+      </select>
+    </div>
 
     <div style="flex:1;"></div>
 
@@ -353,8 +374,28 @@
         <input type="text" id="ssh-username" class="form-input" placeholder="root">
       </div>
       <div class="form-group">
+        <label class="form-label">Authentication</label>
+        <select id="ssh-auth-type" class="form-input" onchange="toggleSSHAuthFields()">
+          <option value="password">Password</option>
+          <option value="key">Private Key</option>
+        </select>
+      </div>
+      <div id="ssh-password-group" class="form-group">
         <label class="form-label">Password</label>
         <input type="password" id="ssh-password" class="form-input" placeholder="Enter password">
+      </div>
+      <div id="ssh-key-group" class="form-group hidden">
+        <label class="form-label">Private Key</label>
+        <div style="display: flex; gap: 8px;">
+          <input type="text" id="ssh-key-path" class="form-input" placeholder="Select private key file..." readonly style="flex: 1;">
+          <button type="button" class="btn btn-secondary" onclick="browseSSHKey()" style="white-space: nowrap;">
+            <i data-lucide="folder-open" class="w-4 h-4"></i>
+          </button>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <label class="form-label">Passphrase (optional)</label>
+          <input type="password" id="ssh-passphrase" class="form-input" placeholder="Key passphrase (if encrypted)">
+        </div>
       </div>
       <input type="hidden" id="ssh-node-id">
     </div>
@@ -520,6 +561,10 @@
   <div class="context-menu-item" onclick="pingNodeFromContext()">
     <i data-lucide="activity" class="w-4 h-4"></i>
     <span>Ping</span>
+  </div>
+  <div class="context-menu-item" onclick="showStatusHistoryFromContext()">
+    <i data-lucide="clock" class="w-4 h-4"></i>
+    <span>Status History</span>
   </div>
   <div class="context-menu-divider"></div>
   <div class="context-menu-item danger" onclick="deleteNodeFromContext()">

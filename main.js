@@ -219,8 +219,29 @@ ipcMain.handle('config:import', async () => {
 // IPC HANDLERS - SSH Connections
 // ============================================
 
+ipcMain.handle('ssh:browseKey', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select SSH Private Key',
+      properties: ['openFile'],
+      filters: [
+        { name: 'SSH Keys', extensions: ['pem', 'key', 'ppk', ''] },
+        { name: 'All Files', extensions: ['*'] }
+      ],
+      defaultPath: require('os').homedir() + '/.ssh'
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      return { success: true, path: result.filePaths[0] };
+    }
+    return { success: false, canceled: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
-  const { nodeId, host, port = 22, username, password, privateKey } = connectionInfo;
+  const { nodeId, host, port = 22, username, password, privateKeyPath, passphrase } = connectionInfo;
 
   return new Promise((resolve) => {
     const conn = new Client();
@@ -271,8 +292,17 @@ ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
       keepaliveInterval: 10000
     };
 
-    if (privateKey) {
-      connectConfig.privateKey = privateKey;
+    // Handle private key authentication
+    if (privateKeyPath) {
+      try {
+        connectConfig.privateKey = fs.readFileSync(privateKeyPath);
+        if (passphrase) {
+          connectConfig.passphrase = passphrase;
+        }
+      } catch (keyError) {
+        resolve({ success: false, error: `Failed to read private key: ${keyError.message}` });
+        return;
+      }
     } else if (password) {
       connectConfig.password = password;
     }
