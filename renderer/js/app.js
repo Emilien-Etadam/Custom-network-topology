@@ -343,6 +343,8 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
+  document.getElementById('btn-export-image').addEventListener('click', exportTopologyAsImage);
+  document.getElementById('btn-auto-layout').addEventListener('click', autoLayoutNodes);
 
   // Search and filter
   document.getElementById('node-search').addEventListener('input', applyNodeFilter);
@@ -1948,6 +1950,278 @@ function updateSnapButton() {
   } else {
     btn.classList.remove('active');
   }
+}
+
+// ============================================
+// Export Topology as Image
+// ============================================
+
+async function exportTopologyAsImage() {
+  toastInfo('Exporting...', 'Preparing topology image');
+
+  // Get the world element containing all nodes and connections
+  const worldEl = document.getElementById('world');
+  const svgEl = document.getElementById('connections-layer');
+
+  if (!worldEl || config.nodes.length === 0) {
+    toastError('Export Failed', 'No topology to export');
+    return;
+  }
+
+  // Calculate bounds of all nodes
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  config.nodes.forEach(node => {
+    const x = (node.x / 100) * 10000;
+    const y = (node.y / 100) * 10000;
+    minX = Math.min(minX, x - 60);
+    minY = Math.min(minY, y - 60);
+    maxX = Math.max(maxX, x + 60);
+    maxY = Math.max(maxY, y + 60);
+  });
+
+  const padding = 50;
+  const width = maxX - minX + padding * 2;
+  const height = maxY - minY + padding * 2;
+
+  // Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // Fill background
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, width, height);
+
+  // Draw grid (optional)
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  const gridSize = 100;
+  for (let x = 0; x < width; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y < height; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  // Draw connections
+  (config.connections || []).forEach(conn => {
+    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
+    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
+    if (!sourceNode || !targetNode) return;
+
+    const x1 = (sourceNode.x / 100) * 10000 - minX + padding;
+    const y1 = (sourceNode.y / 100) * 10000 - minY + padding;
+    const x2 = (targetNode.x / 100) * 10000 - minX + padding;
+    const y2 = (targetNode.y / 100) * 10000 - minY + padding;
+
+    // Get status for color
+    const sourceData = networkData.find(n => n.id === sourceNode.id);
+    const targetData = networkData.find(n => n.id === targetNode.id);
+    const isOnline = sourceData?.status && targetData?.status;
+    const color = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6;
+
+    // Draw bezier curve
+    ctx.beginPath();
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const cpY = Math.min(y1, y2) - 50;
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(midX, cpY, x2, y2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Draw link label if available
+    if (conn.linkType || conn.linkSpeed) {
+      const labelX = midX;
+      const labelY = (y1 + y2) / 2 - 10;
+      const labelText = [conn.linkType, conn.linkSpeed].filter(Boolean).join(' ');
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      const textWidth = ctx.measureText(labelText).width + 10;
+      ctx.fillRect(labelX - textWidth / 2, labelY - 8, textWidth, 16);
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(labelText, labelX, labelY + 4);
+    }
+  });
+
+  // Draw nodes
+  config.nodes.forEach(node => {
+    const x = (node.x / 100) * 10000 - minX + padding;
+    const y = (node.y / 100) * 10000 - minY + padding;
+
+    // Get status
+    const nodeData = networkData.find(n => n.id === node.id);
+    const isOnline = nodeData?.status;
+
+    // Node background
+    const gradient = ctx.createLinearGradient(x - 50, y - 50, x + 50, y + 50);
+    gradient.addColorStop(0, 'rgba(30, 41, 59, 0.95)');
+    gradient.addColorStop(1, 'rgba(15, 23, 42, 0.95)');
+    ctx.fillStyle = gradient;
+
+    // Rounded rectangle
+    const w = 100, h = 100, r = 12;
+    ctx.beginPath();
+    ctx.moveTo(x - w/2 + r, y - h/2);
+    ctx.lineTo(x + w/2 - r, y - h/2);
+    ctx.quadraticCurveTo(x + w/2, y - h/2, x + w/2, y - h/2 + r);
+    ctx.lineTo(x + w/2, y + h/2 - r);
+    ctx.quadraticCurveTo(x + w/2, y + h/2, x + w/2 - r, y + h/2);
+    ctx.lineTo(x - w/2 + r, y + h/2);
+    ctx.quadraticCurveTo(x - w/2, y + h/2, x - w/2, y + h/2 - r);
+    ctx.lineTo(x - w/2, y - h/2 + r);
+    ctx.quadraticCurveTo(x - w/2, y - h/2, x - w/2 + r, y - h/2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = isOnline ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Status indicator
+    ctx.fillStyle = isOnline ? '#22c55e' : '#ef4444';
+    ctx.beginPath();
+    ctx.arc(x + 40, y - 40, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Node name
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(node.name || 'Unknown', x, y + 30);
+
+    // Node address
+    ctx.fillStyle = '#64748b';
+    ctx.font = '9px monospace';
+    ctx.fillText(node.address || '', x, y + 42);
+  });
+
+  // Convert to blob and download
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `topology-${new Date().toISOString().slice(0, 10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toastSuccess('Export Complete', 'Topology image saved');
+  }, 'image/png');
+}
+
+// ============================================
+// Auto Layout
+// ============================================
+
+function autoLayoutNodes() {
+  if (config.nodes.length === 0) {
+    toastWarning('No Nodes', 'Add some nodes first');
+    return;
+  }
+
+  // Build adjacency map from connections
+  const connections = config.connections || [];
+  const adjacency = new Map();
+
+  config.nodes.forEach(node => {
+    adjacency.set(node.id, new Set());
+  });
+
+  connections.forEach(conn => {
+    if (adjacency.has(conn.sourceNodeId) && adjacency.has(conn.targetNodeId)) {
+      adjacency.get(conn.sourceNodeId).add(conn.targetNodeId);
+      adjacency.get(conn.targetNodeId).add(conn.sourceNodeId);
+    }
+  });
+
+  // Find root nodes (nodes with no incoming connections or most connections)
+  let rootNodes = config.nodes.filter(node => {
+    const incoming = connections.filter(c => c.targetNodeId === node.id).length;
+    return incoming === 0;
+  });
+
+  if (rootNodes.length === 0) {
+    // No clear root, use the node with most connections
+    rootNodes = [config.nodes.reduce((best, node) => {
+      const conns = adjacency.get(node.id)?.size || 0;
+      const bestConns = adjacency.get(best.id)?.size || 0;
+      return conns > bestConns ? node : best;
+    }, config.nodes[0])];
+  }
+
+  // BFS to assign levels
+  const levels = new Map();
+  const visited = new Set();
+  let queue = rootNodes.map(n => ({ id: n.id, level: 0 }));
+
+  while (queue.length > 0) {
+    const { id, level } = queue.shift();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    levels.set(id, level);
+
+    const neighbors = adjacency.get(id) || new Set();
+    neighbors.forEach(neighborId => {
+      if (!visited.has(neighborId)) {
+        queue.push({ id: neighborId, level: level + 1 });
+      }
+    });
+  }
+
+  // Handle disconnected nodes
+  config.nodes.forEach(node => {
+    if (!levels.has(node.id)) {
+      levels.set(node.id, 0);
+    }
+  });
+
+  // Group nodes by level
+  const nodesByLevel = new Map();
+  levels.forEach((level, nodeId) => {
+    if (!nodesByLevel.has(level)) {
+      nodesByLevel.set(level, []);
+    }
+    nodesByLevel.get(level).push(nodeId);
+  });
+
+  // Position nodes
+  const levelSpacing = 15; // vertical spacing in %
+  const startY = 10;
+  const startX = 50; // center
+
+  nodesByLevel.forEach((nodeIds, level) => {
+    const count = nodeIds.length;
+    const totalWidth = count * 12; // spacing between nodes in %
+    const startXForLevel = startX - totalWidth / 2 + 6;
+
+    nodeIds.forEach((nodeId, idx) => {
+      const node = config.nodes.find(n => n.id === nodeId);
+      if (node) {
+        node.x = Math.max(5, Math.min(95, startXForLevel + idx * 12));
+        node.y = Math.max(5, Math.min(95, startY + level * levelSpacing));
+      }
+    });
+  });
+
+  saveConfig();
+  renderTree(config.nodes);
+  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${nodesByLevel.size} levels`);
 }
 
 // ============================================
