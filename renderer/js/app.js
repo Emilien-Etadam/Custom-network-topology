@@ -336,23 +336,47 @@ function setupEventListeners() {
     }
   });
 
-  // Keyboard events for connection deletion
+  // Keyboard events - consolidated handler
   document.addEventListener('keydown', (e) => {
-    // Check if user is typing in an input field
+    // Check if user is typing in an input field or inside a modal
+    const isInModal = e.target.closest('.modal') || e.target.closest('.modal-overlay');
     const isTyping = e.target.tagName === 'INPUT' ||
                      e.target.tagName === 'TEXTAREA' ||
                      e.target.tagName === 'SELECT' ||
-                     e.target.isContentEditable ||
-                     e.target.closest('.modal');
+                     e.target.isContentEditable;
+
+    // If in modal, don't handle any shortcuts except Escape to close
+    if (isInModal) {
+      return; // Let the browser handle all keys normally in modals
+    }
+
+    // If typing in an input outside modal, still don't intercept
+    if (isTyping) {
+      return;
+    }
 
     // Delete selected connection with Delete or Backspace key
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId && !isTyping) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId) {
       e.preventDefault();
       deleteSelectedConnection();
     }
-    // Escape to deselect (but not when in modal)
-    if (e.key === 'Escape' && !e.target.closest('.modal')) {
+
+    // Escape to deselect connection and clear node selection
+    if (e.key === 'Escape') {
       deselectConnection();
+      clearSelection();
+    }
+
+    // Ctrl+Z for Undo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    }
+
+    // Ctrl+Y or Ctrl+Shift+Z for Redo
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+      e.preventDefault();
+      redo();
     }
   });
 
@@ -399,32 +423,6 @@ function setupEventListeners() {
     minimapVisible = false;
     document.getElementById('minimap').classList.add('hidden');
     document.getElementById('btn-minimap').classList.remove('active');
-  });
-
-  // Keyboard shortcuts for Undo/Redo
-  document.addEventListener('keydown', (e) => {
-    const isTyping = e.target.tagName === 'INPUT' ||
-                     e.target.tagName === 'TEXTAREA' ||
-                     e.target.tagName === 'SELECT' ||
-                     e.target.isContentEditable ||
-                     e.target.closest('.modal');
-
-    if (!isTyping) {
-      // Ctrl+Z for Undo
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      }
-      // Ctrl+Y or Ctrl+Shift+Z for Redo
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        redo();
-      }
-      // Escape to clear selection
-      if (e.key === 'Escape') {
-        clearSelection();
-      }
-    }
   });
 
   // Search and filter
