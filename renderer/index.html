@@ -10,8 +10,42 @@
   <link rel="stylesheet" href="css/xterm.css">
 
   <style>
-    :root { --bg:#0f172a; --muted:#94a3b8; }
-    body { margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: #0b1220; color:#e6eef8; height:100vh; overflow:hidden; user-select: none; }
+    /* Theme Variables */
+    :root {
+      --bg: #0f172a;
+      --bg-dark: #0b1220;
+      --bg-card: rgba(30, 41, 59, 0.82);
+      --bg-sidebar: rgba(15, 23, 42, 0.95);
+      --bg-input: #0f172a;
+      --bg-modal: #1e293b;
+      --bg-terminal: #1a1a2e;
+      --text-primary: #e6eef8;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --border-color: rgba(255,255,255,0.1);
+      --border-light: rgba(255,255,255,0.05);
+      --grid-line: rgba(255, 255, 255, 0.05);
+      --muted: #94a3b8;
+    }
+
+    [data-theme="light"] {
+      --bg: #f1f5f9;
+      --bg-dark: #e2e8f0;
+      --bg-card: rgba(255, 255, 255, 0.95);
+      --bg-sidebar: rgba(248, 250, 252, 0.98);
+      --bg-input: #ffffff;
+      --bg-modal: #ffffff;
+      --bg-terminal: #1e293b;
+      --text-primary: #1e293b;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --border-color: rgba(0, 0, 0, 0.1);
+      --border-light: rgba(0, 0, 0, 0.05);
+      --grid-line: rgba(0, 0, 0, 0.08);
+      --muted: #64748b;
+    }
+
+    body { margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: var(--bg-dark); color: var(--text-primary); height:100vh; overflow:hidden; user-select: none; transition: background 0.3s, color 0.3s; }
 
     /* Main Layout */
     #app-container { display: flex; flex-direction: column; height: 100vh; }
@@ -23,10 +57,10 @@
     #world { transform-origin: 0 0; width: 100%; height: 100%; position: relative; }
 
     #grid-layer { width: 300%; height: 300%; position: absolute; top: 0; left: 0; pointer-events: none; background-size: 5vw 5vh; }
-    .grid-bg { background-image: linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px); }
-    .grid-label { position: absolute; font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.2); pointer-events: none; display: flex; align-items: center; justify-content: center; }
+    .grid-bg { background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px); }
+    .grid-label { position: absolute; font-family: monospace; font-size: 10px; color: var(--text-muted); opacity: 0.5; pointer-events: none; display: flex; align-items: center; justify-content: center; }
 
-    .card { background: rgba(30, 41, 59, 0.82); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.04); border-radius: 14px; }
+    .card { background: var(--bg-card); backdrop-filter: blur(8px); border: 1px solid var(--border-light); border-radius: 14px; }
     .node-container { position: absolute; transform: translate(-50%,-50%); z-index: 10; cursor: pointer; will-change: left, top; }
     .node-container:hover { z-index: 20; box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
     .node-container.dragging {
@@ -48,54 +82,54 @@
     .animate-flow-reverse { animation: flow-reverse 1s linear infinite; }
 
     /* --- SIDEBAR PANELS --- */
-    #sidebar { width: 320px; background: rgba(15, 23, 42, 0.95); border-left: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; overflow: hidden; }
-    .sidebar-panel { display: flex; flex-direction: column; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .panel-header { padding: 12px 16px; background: rgba(255,255,255,0.03); font-weight: 700; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
-    .panel-header:hover { background: rgba(255,255,255,0.05); }
+    #sidebar { width: 320px; background: var(--bg-sidebar); border-left: 1px solid var(--border-color); display: flex; flex-direction: column; overflow: hidden; transition: background 0.3s; }
+    .sidebar-panel { display: flex; flex-direction: column; border-bottom: 1px solid var(--border-light); }
+    .panel-header { padding: 12px 16px; background: rgba(128,128,128,0.03); font-weight: 700; font-size: 13px; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .panel-header:hover { background: rgba(128,128,128,0.08); }
     .panel-content { padding: 12px 16px; overflow-y: auto; max-height: 300px; }
     .panel-content::-webkit-scrollbar { width: 6px; }
     .panel-content::-webkit-scrollbar-track { background: transparent; }
-    .panel-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    .panel-content::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
 
     /* --- TERMINAL PANEL --- */
     #terminal-panel { flex: 1; display: flex; flex-direction: column; min-height: 200px; }
-    #terminal-container { flex: 1; background: #1a1a2e; padding: 8px; overflow: hidden; }
-    .terminal-tabs { display: flex; background: rgba(0,0,0,0.2); border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .terminal-tab { padding: 8px 16px; font-size: 12px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; }
-    .terminal-tab:hover { color: #94a3b8; background: rgba(255,255,255,0.03); }
-    .terminal-tab.active { color: #fff; border-bottom-color: #3b82f6; }
+    #terminal-container { flex: 1; background: var(--bg-terminal); padding: 8px; overflow: hidden; }
+    .terminal-tabs { display: flex; background: rgba(0,0,0,0.2); border-bottom: 1px solid var(--border-light); }
+    .terminal-tab { padding: 8px 16px; font-size: 12px; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; }
+    .terminal-tab:hover { color: var(--text-secondary); background: rgba(128,128,128,0.05); }
+    .terminal-tab.active { color: var(--text-primary); border-bottom-color: #3b82f6; }
     .terminal-tab .close-btn { opacity: 0; transition: opacity 0.2s; }
     .terminal-tab:hover .close-btn { opacity: 1; }
 
     /* --- HOST LIST --- */
-    .host-row { padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; border-radius: 6px; margin-bottom: 4px; background: rgba(0,0,0,0.2); transition: background 0.2s; }
-    .host-row:hover { background: rgba(255,255,255,0.05); }
+    .host-row { padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; border-radius: 6px; margin-bottom: 4px; background: rgba(128,128,128,0.1); transition: background 0.2s; }
+    .host-row:hover { background: rgba(128,128,128,0.15); }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
-    .status-text { font-family: monospace; color: #64748b; font-size: 11px; }
+    .status-text { font-family: monospace; color: var(--text-muted); font-size: 11px; }
 
     /* --- TOOLBAR --- */
-    #toolbar { background: rgba(15, 23, 42, 0.95); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 8px 16px; display: flex; align-items: center; gap: 16px; }
-    .toolbar-btn { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); cursor: pointer; transition: all 0.2s; }
-    .toolbar-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    #toolbar { background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); padding: 8px 16px; display: flex; align-items: center; gap: 16px; transition: background 0.3s; }
+    .toolbar-btn { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: var(--text-secondary); background: rgba(128,128,128,0.08); border: 1px solid var(--border-color); cursor: pointer; transition: all 0.2s; }
+    .toolbar-btn:hover { background: rgba(128,128,128,0.15); color: var(--text-primary); }
     .toolbar-btn.active { background: rgba(59, 130, 246, 0.2); border-color: #3b82f6; color: #60a5fa; }
-    .toolbar-divider { width: 1px; height: 24px; background: rgba(255,255,255,0.1); }
+    .toolbar-divider { width: 1px; height: 24px; background: var(--border-color); }
 
     /* --- MODALS --- */
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }
-    .modal { background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; width: 480px; max-height: 90vh; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
-    .modal-header { padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
-    .modal-header h3 { font-size: 16px; font-weight: 700; color: #fff; }
+    .modal { background: var(--bg-modal); border: 1px solid var(--border-color); border-radius: 12px; width: 480px; max-height: 90vh; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); transition: background 0.3s; }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); }
     .modal-body { padding: 20px; }
-    .modal-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: flex-end; gap: 12px; }
+    .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border-light); display: flex; justify-content: flex-end; gap: 12px; }
     .form-group { margin-bottom: 16px; }
-    .form-label { display: block; font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 6px; }
-    .form-input { width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-size: 14px; }
+    .form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+    .form-input { width: 100%; padding: 10px 12px; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 14px; transition: background 0.3s, border-color 0.3s; }
     .form-input:focus { outline: none; border-color: #3b82f6; }
     .btn { padding: 10px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
     .btn-primary { background: #3b82f6; color: #fff; border: none; }
     .btn-primary:hover { background: #2563eb; }
-    .btn-secondary { background: transparent; color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); }
-    .btn-secondary:hover { background: rgba(255,255,255,0.05); color: #fff; }
+    .btn-secondary { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+    .btn-secondary:hover { background: rgba(128,128,128,0.1); color: var(--text-primary); }
 
     /* --- NETWORK DISCOVERY --- */
     .discovery-progress { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; margin-top: 8px; }
@@ -103,11 +137,11 @@
     .discovered-host { padding: 8px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
 
     /* --- CONTEXT MENU --- */
-    .context-menu { position: fixed; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; min-width: 180px; z-index: 200; box-shadow: 0 10px 40px rgba(0,0,0,0.5); overflow: hidden; }
-    .context-menu-item { padding: 10px 14px; font-size: 13px; color: #e2e8f0; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+    .context-menu { position: fixed; background: var(--bg-modal); border: 1px solid var(--border-color); border-radius: 8px; min-width: 180px; z-index: 200; box-shadow: 0 10px 40px rgba(0,0,0,0.5); overflow: hidden; }
+    .context-menu-item { padding: 10px 14px; font-size: 13px; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 10px; }
     .context-menu-item:hover { background: rgba(59, 130, 246, 0.2); }
     .context-menu-item.danger:hover { background: rgba(239, 68, 68, 0.2); color: #f87171; }
-    .context-menu-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 4px 0; }
+    .context-menu-divider { height: 1px; background: var(--border-light); margin: 4px 0; }
 
     /* --- PORT HANDLES (React Flow style) --- */
     .node-ports { position: absolute; width: 100%; height: 100%; pointer-events: none; top: 0; left: 0; }
@@ -139,10 +173,10 @@
       position: absolute;
       font-size: 8px;
       font-family: monospace;
-      color: #e2e8f0;
+      color: var(--text-primary);
       white-space: nowrap;
       pointer-events: none;
-      background: rgba(15, 23, 42, 0.95);
+      background: var(--bg-sidebar);
       padding: 2px 5px;
       border-radius: 3px;
       border: 1px solid rgba(59, 130, 246, 0.3);
@@ -183,8 +217,8 @@
       gap: 12px;
       padding: 14px 18px;
       border-radius: 8px;
-      background: rgba(30, 41, 59, 0.95);
-      border: 1px solid rgba(255,255,255,0.1);
+      background: var(--bg-modal);
+      border: 1px solid var(--border-color);
       box-shadow: 0 10px 40px rgba(0,0,0,0.4);
       backdrop-filter: blur(8px);
       min-width: 280px;
@@ -218,23 +252,102 @@
     .toast.warning .toast-icon { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
     .toast.info .toast-icon { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
     .toast-content { flex: 1; }
-    .toast-title { font-weight: 600; font-size: 13px; color: #fff; margin-bottom: 2px; }
-    .toast-message { font-size: 12px; color: #94a3b8; line-height: 1.4; }
+    .toast-title { font-weight: 600; font-size: 13px; color: var(--text-primary); margin-bottom: 2px; }
+    .toast-message { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
     .toast-close {
       flex-shrink: 0;
       padding: 4px;
-      color: #64748b;
+      color: var(--text-muted);
       cursor: pointer;
       border-radius: 4px;
       transition: all 0.2s;
     }
-    .toast-close:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    .toast-close:hover { background: rgba(128,128,128,0.2); color: var(--text-primary); }
 
     /* Clickable host rows */
     .host-row { cursor: pointer; transition: background 0.15s; }
     .host-row:hover { background: rgba(59, 130, 246, 0.1); }
 
     .hidden { display: none !important; }
+
+    /* --- MULTI-SELECT --- */
+    .selection-rect {
+      position: absolute;
+      border: 2px dashed #3b82f6;
+      background: rgba(59, 130, 246, 0.1);
+      pointer-events: none;
+      z-index: 50;
+    }
+    .node-container.selected {
+      box-shadow: 0 0 0 3px #3b82f6, 0 0 20px rgba(59, 130, 246, 0.4);
+    }
+    .node-container.selected::after {
+      content: '';
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      width: 16px;
+      height: 16px;
+      background: #3b82f6;
+      border-radius: 50%;
+      border: 2px solid var(--bg-card);
+    }
+
+    /* --- MINI-MAP --- */
+    #minimap {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      width: 200px;
+      height: 150px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+      z-index: 50;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    #minimap-canvas {
+      width: 100%;
+      height: 100%;
+    }
+    #minimap-viewport {
+      position: absolute;
+      border: 2px solid #3b82f6;
+      background: rgba(59, 130, 246, 0.15);
+      pointer-events: none;
+    }
+    #minimap-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 4px 8px;
+      background: rgba(0,0,0,0.3);
+      font-size: 10px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #minimap-close {
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 3px;
+    }
+    #minimap-close:hover {
+      background: rgba(255,255,255,0.1);
+    }
+
+    /* --- UNDO/REDO TOOLBAR --- */
+    .toolbar-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .toolbar-btn:disabled:hover {
+      background: rgba(128,128,128,0.08);
+      color: var(--text-secondary);
+    }
   </style>
 </head>
 <body>
@@ -288,6 +401,26 @@
 
     <div class="toolbar-divider"></div>
 
+    <!-- Undo/Redo -->
+    <button class="toolbar-btn" id="btn-undo" title="Undo (Ctrl+Z)" disabled>
+      <i data-lucide="undo-2" class="w-4 h-4"></i>
+    </button>
+    <button class="toolbar-btn" id="btn-redo" title="Redo (Ctrl+Y)" disabled>
+      <i data-lucide="redo-2" class="w-4 h-4"></i>
+    </button>
+
+    <div class="toolbar-divider"></div>
+
+    <!-- View Controls -->
+    <button class="toolbar-btn" id="btn-minimap" title="Toggle Minimap">
+      <i data-lucide="map" class="w-4 h-4"></i>
+    </button>
+    <button class="toolbar-btn" id="btn-theme" title="Toggle Dark/Light Theme">
+      <i data-lucide="moon" class="w-4 h-4" id="theme-icon"></i>
+    </button>
+
+    <div class="toolbar-divider"></div>
+
     <!-- Search and Filter -->
     <div style="display: flex; align-items: center; gap: 8px;">
       <div style="position: relative;">
@@ -321,7 +454,18 @@
           <div id="grid-layer" class="grid-bg"><div id="grid-labels"></div></div>
           <svg id="connections-layer" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
           <div id="tree-container" style="position:absolute; inset:0; z-index:20; pointer-events:none;"></div>
+          <!-- Selection rectangle for multi-select -->
+          <div id="selection-rect" class="selection-rect hidden"></div>
         </div>
+      </div>
+      <!-- Mini-map -->
+      <div id="minimap" class="hidden">
+        <div id="minimap-header">
+          <span>Mini-map</span>
+          <span id="minimap-close"><i data-lucide="x" class="w-3 h-3"></i></span>
+        </div>
+        <canvas id="minimap-canvas"></canvas>
+        <div id="minimap-viewport"></div>
       </div>
     </div>
 
