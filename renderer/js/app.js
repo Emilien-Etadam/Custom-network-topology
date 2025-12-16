@@ -1095,7 +1095,11 @@ async function pingNodeFromContext() {
   hideContextMenu();
 
   const result = await window.electronAPI.network.ping(contextMenuNode.address);
-  alert(`Ping ${contextMenuNode.address}: ${result.success ? 'OK' : 'FAILED'} (${result.duration}ms)`);
+  if (result.success) {
+    toastSuccess('Ping Successful', `${contextMenuNode.address} responded in ${result.duration}ms`);
+  } else {
+    toastError('Ping Failed', `${contextMenuNode.address} did not respond (${result.duration}ms)`);
+  }
 }
 
 function deleteNodeFromContext() {
@@ -1141,7 +1145,7 @@ function openSSHModal(node) {
 
 async function connectSSH() {
   if (!window.electronAPI) {
-    alert('SSH is only available in Electron');
+    toastWarning('SSH Unavailable', 'SSH is only available in the desktop application');
     return;
   }
 
@@ -1152,7 +1156,7 @@ async function connectSSH() {
   const password = document.getElementById('ssh-password').value;
 
   if (!host || !username) {
-    alert('Host and username are required');
+    toastError('Missing Credentials', 'Host and username are required');
     return;
   }
 
@@ -1174,10 +1178,11 @@ async function connectSSH() {
     document.getElementById('terminal-status').textContent = 'Connected';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-green-600';
     createTerminalTab(nodeId, host);
+    toastSuccess('SSH Connected', `Connected to ${host}`);
   } else {
     document.getElementById('terminal-status').textContent = 'Failed';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-red-600';
-    alert('SSH connection failed: ' + result.error);
+    toastError('SSH Connection Failed', result.error);
   }
 }
 
@@ -1439,21 +1444,41 @@ function removeNodePort(idx) {
 
 function saveNode() {
   const id = document.getElementById('node-edit-id').value;
-  const name = document.getElementById('node-name').value;
-  const address = document.getElementById('node-address').value;
-  const port = document.getElementById('node-port').value;
+  const name = document.getElementById('node-name').value.trim();
+  const address = document.getElementById('node-address').value.trim();
+  const port = document.getElementById('node-port').value.trim();
   const iconType = document.getElementById('node-icon-type').value;
   const icon = document.getElementById('node-icon').value;
   const primaryParentId = document.getElementById('node-primary-parent').value || null;
   const secondaryParentId = document.getElementById('node-secondary-parent').value || null;
-  const sshPort = document.getElementById('node-ssh-port').value;
+  const sshPort = document.getElementById('node-ssh-port').value.trim();
   const sshUser = document.getElementById('node-ssh-user').value;
   const sshPass = document.getElementById('node-ssh-pass').value;
   const linkType = document.getElementById('node-link-type').value || null;
   const linkSpeed = document.getElementById('node-link-speed').value || null;
 
+  // Validation
   if (!name) {
-    alert('Name is required');
+    toastError('Validation Error', 'Node name is required');
+    document.getElementById('node-name').focus();
+    return;
+  }
+
+  if (address && !isValidHostname(address)) {
+    toastError('Validation Error', 'Invalid IP address or hostname');
+    document.getElementById('node-address').focus();
+    return;
+  }
+
+  if (port && !isValidPort(port)) {
+    toastError('Validation Error', 'Port must be between 1 and 65535');
+    document.getElementById('node-port').focus();
+    return;
+  }
+
+  if (sshPort && !isValidPort(sshPort)) {
+    toastError('Validation Error', 'SSH port must be between 1 and 65535');
+    document.getElementById('node-ssh-port').focus();
     return;
   }
 
@@ -1505,6 +1530,9 @@ function saveNode() {
   renderTree(config.nodes);
   renderHostList(config.nodes);
 
+  // Show success toast
+  toastSuccess(id ? 'Node Updated' : 'Node Created', `"${name}" has been ${id ? 'updated' : 'added'} successfully`);
+
   // Restart monitoring with updated config
   if (monitoringActive) {
     stopMonitoring().then(() => startMonitoring());
@@ -1520,7 +1548,7 @@ let networkInterfaces = []; // Store interfaces for reference
 
 async function openDiscoveryModal() {
   if (!window.electronAPI) {
-    alert('Network discovery is only available in Electron');
+    toastWarning('Discovery Unavailable', 'Network discovery is only available in the desktop application');
     return;
   }
 
@@ -1594,7 +1622,7 @@ async function startNetworkScan() {
   const endRange = parseInt(document.getElementById('discovery-end').value) || 254;
 
   if (!baseIp) {
-    alert('Please enter a base IP');
+    toastError('Missing Input', 'Please enter a base IP address');
     return;
   }
 
@@ -1833,6 +1861,115 @@ function togglePanel(id) {
   if (panel) {
     panel.classList.toggle('hidden');
   }
+}
+
+// ============================================
+// Toast Notifications
+// ============================================
+
+const toastIcons = {
+  success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>'
+};
+
+function showToast(type, title, message, duration = 4000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `
+    <div class="toast-icon">${toastIcons[type] || toastIcons.info}</div>
+    <div class="toast-content">
+      <div class="toast-title">${escapeHtml(title)}</div>
+      ${message ? `<div class="toast-message">${escapeHtml(message)}</div>` : ''}
+    </div>
+    <div class="toast-close" onclick="this.parentElement.remove()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 6L6 18M6 6l12 12"/>
+      </svg>
+    </div>
+  `;
+
+  container.appendChild(toast);
+
+  // Auto-dismiss
+  if (duration > 0) {
+    setTimeout(() => {
+      toast.classList.add('hiding');
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  return toast;
+}
+
+// Convenience functions
+function toastSuccess(title, message) { return showToast('success', title, message); }
+function toastError(title, message) { return showToast('error', title, message, 6000); }
+function toastWarning(title, message) { return showToast('warning', title, message, 5000); }
+function toastInfo(title, message) { return showToast('info', title, message); }
+
+// ============================================
+// Input Validation
+// ============================================
+
+function isValidIP(ip) {
+  if (!ip) return false;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every(part => {
+    const num = parseInt(part, 10);
+    return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
+  });
+}
+
+function isValidHostname(hostname) {
+  if (!hostname) return false;
+  // Allow IP addresses and valid hostnames
+  if (isValidIP(hostname)) return true;
+  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return hostnameRegex.test(hostname);
+}
+
+function isValidPort(port) {
+  const num = parseInt(port, 10);
+  return !isNaN(num) && num >= 1 && num <= 65535;
+}
+
+function validateNodeForm() {
+  const name = document.getElementById('node-name').value.trim();
+  const address = document.getElementById('node-address').value.trim();
+  const port = document.getElementById('node-port').value.trim();
+  const sshPort = document.getElementById('node-ssh-port').value.trim();
+
+  if (!name) {
+    toastError('Validation Error', 'Node name is required');
+    document.getElementById('node-name').focus();
+    return false;
+  }
+
+  if (address && !isValidHostname(address)) {
+    toastError('Validation Error', 'Invalid IP address or hostname');
+    document.getElementById('node-address').focus();
+    return false;
+  }
+
+  if (port && !isValidPort(port)) {
+    toastError('Validation Error', 'Port must be between 1 and 65535');
+    document.getElementById('node-port').focus();
+    return false;
+  }
+
+  if (sshPort && !isValidPort(sshPort)) {
+    toastError('Validation Error', 'SSH port must be between 1 and 65535');
+    document.getElementById('node-ssh-port').focus();
+    return false;
+  }
+
+  return true;
 }
 
 // ============================================
