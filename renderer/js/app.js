@@ -11,6 +11,10 @@ let monitoringActive = false;
 let contextMenuNode = null;
 let uptimeTrackers = new Map();
 
+// Status history tracking
+let statusHistory = new Map(); // nodeId -> { lastStatus, lastChange, history: [{status, time}] }
+const MAX_HISTORY_ENTRIES = 50;
+
 // Connection dragging state
 let isConnecting = false;
 let connectionStart = null; // { nodeId, portId, element }
@@ -294,17 +298,20 @@ function setupEventListeners() {
 
   // Keyboard events for connection deletion
   document.addEventListener('keydown', (e) => {
+    // Check if user is typing in an input field
+    const isTyping = e.target.tagName === 'INPUT' ||
+                     e.target.tagName === 'TEXTAREA' ||
+                     e.target.tagName === 'SELECT' ||
+                     e.target.isContentEditable ||
+                     e.target.closest('.modal');
+
     // Delete selected connection with Delete or Backspace key
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId) {
-      // Don't delete if focus is on an input element
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
-        return;
-      }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId && !isTyping) {
       e.preventDefault();
       deleteSelectedConnection();
     }
-    // Escape to deselect
-    if (e.key === 'Escape') {
+    // Escape to deselect (but not when in modal)
+    if (e.key === 'Escape' && !e.target.closest('.modal')) {
       deselectConnection();
     }
   });
@@ -336,6 +343,10 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
+
+  // Search and filter
+  document.getElementById('node-search').addEventListener('input', applyNodeFilter);
+  document.getElementById('node-filter-status').addEventListener('change', applyNodeFilter);
 
   // Window resize - use networkData if monitoring, otherwise config
   window.addEventListener('resize', () => {
@@ -440,6 +451,10 @@ function renderTree(nodes) {
       }
     });
 
+    // Determine if labels should always be visible (multiple ports or output ports)
+    const totalPorts = ports.length;
+    const hasMultiplePorts = totalPorts >= 2;
+
     let portsHtml = '<div class="node-ports">';
     Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
       const count = sidePorts.length;
@@ -467,6 +482,9 @@ function renderTree(nodes) {
           else posStyle += ' right: -6px;';
         }
 
+        // Show label permanently if: output port (bottom) OR multiple ports on node
+        const alwaysVisible = (side === 'bottom' || hasMultiplePorts) ? 'always-visible' : '';
+
         portsHtml += `
           <div class="port-handle ${isConnected ? 'connected' : ''}"
                style="${posStyle}"
@@ -475,7 +493,7 @@ function renderTree(nodes) {
                data-side="${side}"
                data-index="${idx}"
                title="${escapeHtml(port.name)}"></div>
-          <span class="port-label" style="${posStyle}">${escapeHtml(port.name)}</span>
+          <span class="port-label ${alwaysVisible}" style="${posStyle}">${escapeHtml(port.name)}</span>
         `;
       });
     });
@@ -614,40 +632,6 @@ function drawLines() {
     group.style.pointerEvents = 'auto';
 
     svg.appendChild(group);
-
-    // Draw link speed/type label if available
-    if (conn.linkType || conn.linkSpeed) {
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
-
-      let labelParts = [];
-      if (conn.linkType) labelParts.push(conn.linkType);
-      if (conn.linkSpeed) labelParts.push(conn.linkSpeed);
-      const labelText = labelParts.join(' ');
-
-      const textBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      const textWidth = labelText.length * 6 + 8;
-      textBg.setAttribute('x', midX - textWidth / 2);
-      textBg.setAttribute('y', midY - 8);
-      textBg.setAttribute('width', textWidth);
-      textBg.setAttribute('height', 16);
-      textBg.setAttribute('rx', 4);
-      textBg.setAttribute('fill', 'rgba(15, 23, 42, 0.9)');
-      textBg.setAttribute('stroke', baseColor);
-      textBg.setAttribute('stroke-width', '1');
-      svg.appendChild(textBg);
-
-      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      text.setAttribute('x', midX);
-      text.setAttribute('y', midY + 4);
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('fill', '#e2e8f0');
-      text.setAttribute('font-size', '10');
-      text.setAttribute('font-family', 'monospace');
-      text.setAttribute('font-weight', 'bold');
-      text.textContent = labelText;
-      svg.appendChild(text);
-    }
 
     // Draw link speed/type label if available
     if (conn.linkType || conn.linkSpeed) {
@@ -913,190 +897,6 @@ function deleteSelectedConnection() {
   }
 }
 
-// Get the pixel position of a port on a node
-function getPortPosition(nodeEl, port, node) {
-  // Try to find the actual port element for precise positioning
-  if (port && port.id) {
-    const portEl = nodeEl.querySelector(`[data-port-id="${port.id}"]`);
-    if (portEl) {
-      // Get port element's center position relative to world
-      const portRect = portEl.getBoundingClientRect();
-      const worldRect = world.getBoundingClientRect();
-
-      // Calculate position in world coordinates (accounting for zoom/pan)
-      const x = (portRect.left + portRect.width / 2 - worldRect.left) / scale;
-      const y = (portRect.top + portRect.height / 2 - worldRect.top) / scale;
-
-      return { x, y };
-    }
-  }
-
-  // Fallback: calculate based on node position
-  const nodeW = nodeEl.offsetWidth;
-  const nodeH = nodeEl.offsetHeight;
-
-  // Node center (offsetLeft/Top is already the center due to CSS transform)
-  const nodeX = nodeEl.offsetLeft;
-  const nodeY = nodeEl.offsetTop;
-
-  // Get port index for positioning multiple ports on same side
-  const samePortSide = (node.ports || []).filter(p => p.side === port?.side);
-  const portIndex = samePortSide.findIndex(p => p.id === port?.id);
-  const portCount = samePortSide.length;
-
-  // Calculate offset for multiple ports (spread them out) - match CSS percentages
-  let offsetPercent = 50;
-  if (portCount > 1) {
-    // CSS uses 30%, 50%, 70% for 3 ports
-    const positions = portCount === 2 ? [35, 65] :
-                      portCount === 3 ? [30, 50, 70] :
-                      Array.from({length: portCount}, (_, i) => 20 + (60 * i / (portCount - 1)));
-    offsetPercent = positions[portIndex] || 50;
-  }
-
-  const side = port?.side || 'bottom';
-  switch (side) {
-    case 'top':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY - nodeH / 2 };
-    case 'bottom':
-      return { x: nodeX - nodeW / 2 + (nodeW * offsetPercent / 100), y: nodeY + nodeH / 2 };
-    case 'left':
-      return { x: nodeX - nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    case 'right':
-      return { x: nodeX + nodeW / 2, y: nodeY - nodeH / 2 + (nodeH * offsetPercent / 100) };
-    default:
-      return { x: nodeX, y: nodeY };
-  }
-}
-
-// Create a bezier path between two points, considering port sides
-function createBezierPath(x1, y1, x2, y2, sourceSide, targetSide) {
-  const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
-  const curvature = Math.min(distance * 0.5, 100);
-
-  let cx1 = x1, cy1 = y1, cx2 = x2, cy2 = y2;
-
-  // Adjust control points based on port sides
-  switch (sourceSide) {
-    case 'top': cy1 = y1 - curvature; break;
-    case 'bottom': cy1 = y1 + curvature; break;
-    case 'left': cx1 = x1 - curvature; break;
-    case 'right': cx1 = x1 + curvature; break;
-  }
-
-  switch (targetSide) {
-    case 'top': cy2 = y2 - curvature; break;
-    case 'bottom': cy2 = y2 + curvature; break;
-    case 'left': cx2 = x2 - curvature; break;
-    case 'right': cx2 = x2 + curvature; break;
-  }
-
-  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
-}
-
-// ============================================
-// Connection Drag & Drop
-// ============================================
-
-function startConnection(e, node, portEl) {
-  e.stopPropagation();
-  e.preventDefault();
-
-  isConnecting = true;
-  connectionStart = {
-    nodeId: node.id,
-    portId: portEl.dataset.portId,
-    element: portEl
-  };
-
-  // Add temporary line SVG
-  const svg = document.getElementById('connections-layer');
-  const tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  tempLine.id = 'temp-connection';
-  tempLine.setAttribute('fill', 'none');
-  tempLine.setAttribute('stroke', '#3b82f6');
-  tempLine.setAttribute('stroke-width', '2');
-  tempLine.setAttribute('stroke-dasharray', '5 5');
-  svg.appendChild(tempLine);
-
-  document.addEventListener('mousemove', handleConnectionDrag);
-  document.addEventListener('mouseup', endConnection);
-}
-
-function handleConnectionDrag(e) {
-  if (!isConnecting || !connectionStart) return;
-
-  const svg = document.getElementById('connections-layer');
-  const tempLine = document.getElementById('temp-connection');
-  if (!tempLine) return;
-
-  const sourceEl = document.getElementById(`node-${connectionStart.nodeId}`);
-  const sourceNode = config.nodes.find(n => n.id === connectionStart.nodeId);
-  const sourcePort = sourceNode?.ports?.find(p => p.id === connectionStart.portId);
-  const startPos = getPortPosition(sourceEl, sourcePort, sourceNode);
-
-  // Get mouse position relative to world
-  const worldRect = world.getBoundingClientRect();
-  const mouseX = (e.clientX - worldRect.left) / scale;
-  const mouseY = (e.clientY - worldRect.top) / scale;
-
-  const d = createBezierPath(startPos.x, startPos.y, mouseX, mouseY, sourcePort?.side || 'bottom', 'top');
-  tempLine.setAttribute('d', d);
-}
-
-function endConnection(e) {
-  document.removeEventListener('mousemove', handleConnectionDrag);
-  document.removeEventListener('mouseup', endConnection);
-
-  // Remove temp line
-  const tempLine = document.getElementById('temp-connection');
-  if (tempLine) tempLine.remove();
-
-  if (!isConnecting || !connectionStart) {
-    isConnecting = false;
-    connectionStart = null;
-    return;
-  }
-
-  // Check if we dropped on a port
-  const targetPort = e.target.closest('.port-handle');
-  if (targetPort && targetPort !== connectionStart.element) {
-    const targetNodeId = targetPort.dataset.nodeId;
-    const targetPortId = targetPort.dataset.portId;
-
-    // Don't connect to same node
-    if (targetNodeId !== connectionStart.nodeId) {
-      // Check if connection already exists
-      const existingConn = config.connections.find(c =>
-        (c.sourceNodeId === connectionStart.nodeId && c.sourcePortId === connectionStart.portId &&
-         c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) ||
-        (c.sourceNodeId === targetNodeId && c.sourcePortId === targetPortId &&
-         c.targetNodeId === connectionStart.nodeId && c.targetPortId === connectionStart.portId)
-      );
-
-      if (!existingConn) {
-        // Create new connection
-        config.connections.push({
-          id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          sourceNodeId: connectionStart.nodeId,
-          sourcePortId: connectionStart.portId,
-          targetNodeId: targetNodeId,
-          targetPortId: targetPortId,
-          linkType: null,
-          linkSpeed: null,
-          isFailover: false
-        });
-
-        saveConfig();
-        renderTree(config.nodes);
-      }
-    }
-  }
-
-  isConnecting = false;
-  connectionStart = null;
-}
-
 // ============================================
 // Node Drag & Drop
 // ============================================
@@ -1263,6 +1063,119 @@ function renderHostList(nodes) {
     `;
   });
   list.innerHTML = html;
+
+  // Add click handlers to focus on node
+  list.querySelectorAll('.host-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const nodeId = row.dataset.nodeId;
+      focusOnNode(nodeId);
+    });
+  });
+}
+
+function applyNodeFilter() {
+  const searchTerm = document.getElementById('node-search').value.toLowerCase().trim();
+  const statusFilter = document.getElementById('node-filter-status').value;
+
+  // Get nodes from monitoring data if active, otherwise from config
+  const sourceNodes = monitoringActive && networkData.length ? networkData : config.nodes;
+
+  // Filter nodes
+  const filteredNodes = sourceNodes.filter(node => {
+    // Search filter (name or address)
+    const matchesSearch = !searchTerm ||
+      (node.name && node.name.toLowerCase().includes(searchTerm)) ||
+      (node.address && node.address.toLowerCase().includes(searchTerm));
+
+    // Status filter
+    let matchesStatus = true;
+    if (statusFilter === 'online') {
+      matchesStatus = node.status === true;
+    } else if (statusFilter === 'offline') {
+      matchesStatus = node.status === false || node.status === undefined;
+    }
+
+    return matchesSearch && matchesStatus;
+  });
+
+  // Update host list with filtered nodes
+  renderHostList(filteredNodes);
+
+  // Update host count to show filtered/total
+  const countEl = document.getElementById('host-count');
+  if (searchTerm || statusFilter !== 'all') {
+    countEl.innerText = `${filteredNodes.length}/${sourceNodes.length}`;
+  } else {
+    countEl.innerText = sourceNodes.length;
+  }
+
+  // Highlight matching nodes in viewport
+  highlightFilteredNodes(filteredNodes.map(n => n.id));
+}
+
+function highlightFilteredNodes(matchingIds) {
+  const searchTerm = document.getElementById('node-search').value.trim();
+  const statusFilter = document.getElementById('node-filter-status').value;
+  const isFiltering = searchTerm || statusFilter !== 'all';
+
+  document.querySelectorAll('.node-container').forEach(el => {
+    const nodeId = el.id.replace('node-', '');
+    if (isFiltering) {
+      if (matchingIds.includes(nodeId)) {
+        el.style.opacity = '1';
+        el.style.filter = 'none';
+      } else {
+        el.style.opacity = '0.3';
+        el.style.filter = 'grayscale(50%)';
+      }
+    } else {
+      el.style.opacity = '1';
+      el.style.filter = 'none';
+    }
+  });
+}
+
+function focusOnNode(nodeId) {
+  const node = config.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+
+  const el = document.getElementById(`node-${nodeId}`);
+  if (!el) return;
+
+  // Calculate position to center the node
+  const viewportRect = viewport.getBoundingClientRect();
+  const targetX = viewportRect.width / 2 - (node.x / 100 * 10000) * scale;
+  const targetY = viewportRect.height / 2 - (node.y / 100 * 10000) * scale;
+
+  // Animate pan to node
+  const startX = pointX;
+  const startY = pointY;
+  const duration = 300;
+  const startTime = performance.now();
+
+  function animate(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+
+    pointX = startX + (targetX - startX) * eased;
+    pointY = startY + (targetY - startY) * eased;
+    updateTransform();
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      // Flash highlight effect
+      el.style.transition = 'box-shadow 0.2s';
+      el.style.boxShadow = '0 0 20px 10px rgba(59, 130, 246, 0.6)';
+      setTimeout(() => {
+        el.style.boxShadow = '';
+        setTimeout(() => { el.style.transition = ''; }, 200);
+      }, 500);
+    }
+  }
+
+  requestAnimationFrame(animate);
 }
 
 // ============================================
@@ -1303,7 +1216,39 @@ async function pingNodeFromContext() {
   hideContextMenu();
 
   const result = await window.electronAPI.network.ping(contextMenuNode.address);
-  alert(`Ping ${contextMenuNode.address}: ${result.success ? 'OK' : 'FAILED'} (${result.duration}ms)`);
+  if (result.success) {
+    toastSuccess('Ping Successful', `${contextMenuNode.address} responded in ${result.duration}ms`);
+  } else {
+    toastError('Ping Failed', `${contextMenuNode.address} did not respond (${result.duration}ms)`);
+  }
+}
+
+function showStatusHistoryFromContext() {
+  if (!contextMenuNode) return;
+  hideContextMenu();
+
+  const history = statusHistory.get(contextMenuNode.id);
+  const nodeName = contextMenuNode.name || contextMenuNode.id;
+
+  if (!history || history.history.length === 0) {
+    toastInfo('Status History', `No history available for "${nodeName}". Start monitoring to track status.`);
+    return;
+  }
+
+  // Build history message
+  const lastChange = getLastStatusChange(contextMenuNode.id);
+  let message = `Current: ${lastChange.status ? 'Online' : 'Offline'} for ${lastChange.duration}\n\n`;
+  message += 'Recent changes:\n';
+
+  const recent = history.history.slice(-5).reverse();
+  recent.forEach(entry => {
+    const time = new Date(entry.time).toLocaleString();
+    const status = entry.status ? '🟢 Online' : '🔴 Offline';
+    message += `• ${time}: ${status}\n`;
+  });
+
+  // Show as alert for now (could be improved with a modal)
+  alert(`Status History for "${nodeName}"\n\n${message}`);
 }
 
 function deleteNodeFromContext() {
@@ -1344,12 +1289,47 @@ function openSSHModal(node) {
   document.getElementById('ssh-username').value = node.sshUser || '';
   document.getElementById('ssh-password').value = node.sshPass || '';
   document.getElementById('ssh-node-id').value = node.id;
+
+  // Reset auth type and fields
+  document.getElementById('ssh-auth-type').value = 'password';
+  document.getElementById('ssh-key-path').value = '';
+  document.getElementById('ssh-passphrase').value = '';
+  toggleSSHAuthFields();
+
   openModal('ssh-modal');
+  lucide.createIcons();
+}
+
+function toggleSSHAuthFields() {
+  const authType = document.getElementById('ssh-auth-type').value;
+  const passwordGroup = document.getElementById('ssh-password-group');
+  const keyGroup = document.getElementById('ssh-key-group');
+
+  if (authType === 'password') {
+    passwordGroup.classList.remove('hidden');
+    keyGroup.classList.add('hidden');
+  } else {
+    passwordGroup.classList.add('hidden');
+    keyGroup.classList.remove('hidden');
+  }
+}
+
+async function browseSSHKey() {
+  if (!window.electronAPI) {
+    toastWarning('Not Available', 'File browsing is only available in the desktop application');
+    return;
+  }
+
+  const result = await window.electronAPI.ssh.browseKey();
+  if (result.success) {
+    document.getElementById('ssh-key-path').value = result.path;
+    toastInfo('Key Selected', `Selected: ${result.path.split(/[\\/]/).pop()}`);
+  }
 }
 
 async function connectSSH() {
   if (!window.electronAPI) {
-    alert('SSH is only available in Electron');
+    toastWarning('SSH Unavailable', 'SSH is only available in the desktop application');
     return;
   }
 
@@ -1357,11 +1337,34 @@ async function connectSSH() {
   const host = document.getElementById('ssh-host').value;
   const port = parseInt(document.getElementById('ssh-port').value) || 22;
   const username = document.getElementById('ssh-username').value;
-  const password = document.getElementById('ssh-password').value;
+  const authType = document.getElementById('ssh-auth-type').value;
 
   if (!host || !username) {
-    alert('Host and username are required');
+    toastError('Missing Credentials', 'Host and username are required');
     return;
+  }
+
+  // Build connection info based on auth type
+  const connectionInfo = { nodeId, host, port, username };
+
+  if (authType === 'password') {
+    const password = document.getElementById('ssh-password').value;
+    if (!password) {
+      toastError('Missing Password', 'Password is required');
+      return;
+    }
+    connectionInfo.password = password;
+  } else {
+    const keyPath = document.getElementById('ssh-key-path').value;
+    if (!keyPath) {
+      toastError('Missing Key', 'Private key file is required');
+      return;
+    }
+    connectionInfo.privateKeyPath = keyPath;
+    const passphrase = document.getElementById('ssh-passphrase').value;
+    if (passphrase) {
+      connectionInfo.passphrase = passphrase;
+    }
   }
 
   closeModal('ssh-modal');
@@ -1370,22 +1373,17 @@ async function connectSSH() {
   document.getElementById('terminal-status').textContent = 'Connecting...';
   document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-yellow-600';
 
-  const result = await window.electronAPI.ssh.connect({
-    nodeId,
-    host,
-    port,
-    username,
-    password
-  });
+  const result = await window.electronAPI.ssh.connect(connectionInfo);
 
   if (result.success) {
     document.getElementById('terminal-status').textContent = 'Connected';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-green-600';
     createTerminalTab(nodeId, host);
+    toastSuccess('SSH Connected', `Connected to ${host}`);
   } else {
     document.getElementById('terminal-status').textContent = 'Failed';
     document.getElementById('terminal-status').className = 'text-xs px-2 py-0.5 rounded bg-red-600';
-    alert('SSH connection failed: ' + result.error);
+    toastError('SSH Connection Failed', result.error);
   }
 }
 
@@ -1647,21 +1645,41 @@ function removeNodePort(idx) {
 
 function saveNode() {
   const id = document.getElementById('node-edit-id').value;
-  const name = document.getElementById('node-name').value;
-  const address = document.getElementById('node-address').value;
-  const port = document.getElementById('node-port').value;
+  const name = document.getElementById('node-name').value.trim();
+  const address = document.getElementById('node-address').value.trim();
+  const port = document.getElementById('node-port').value.trim();
   const iconType = document.getElementById('node-icon-type').value;
   const icon = document.getElementById('node-icon').value;
   const primaryParentId = document.getElementById('node-primary-parent').value || null;
   const secondaryParentId = document.getElementById('node-secondary-parent').value || null;
-  const sshPort = document.getElementById('node-ssh-port').value;
+  const sshPort = document.getElementById('node-ssh-port').value.trim();
   const sshUser = document.getElementById('node-ssh-user').value;
   const sshPass = document.getElementById('node-ssh-pass').value;
   const linkType = document.getElementById('node-link-type').value || null;
   const linkSpeed = document.getElementById('node-link-speed').value || null;
 
+  // Validation
   if (!name) {
-    alert('Name is required');
+    toastError('Validation Error', 'Node name is required');
+    document.getElementById('node-name').focus();
+    return;
+  }
+
+  if (address && !isValidHostname(address)) {
+    toastError('Validation Error', 'Invalid IP address or hostname');
+    document.getElementById('node-address').focus();
+    return;
+  }
+
+  if (port && !isValidPort(port)) {
+    toastError('Validation Error', 'Port must be between 1 and 65535');
+    document.getElementById('node-port').focus();
+    return;
+  }
+
+  if (sshPort && !isValidPort(sshPort)) {
+    toastError('Validation Error', 'SSH port must be between 1 and 65535');
+    document.getElementById('node-ssh-port').focus();
     return;
   }
 
@@ -1713,6 +1731,9 @@ function saveNode() {
   renderTree(config.nodes);
   renderHostList(config.nodes);
 
+  // Show success toast
+  toastSuccess(id ? 'Node Updated' : 'Node Created', `"${name}" has been ${id ? 'updated' : 'added'} successfully`);
+
   // Restart monitoring with updated config
   if (monitoringActive) {
     stopMonitoring().then(() => startMonitoring());
@@ -1728,7 +1749,7 @@ let networkInterfaces = []; // Store interfaces for reference
 
 async function openDiscoveryModal() {
   if (!window.electronAPI) {
-    alert('Network discovery is only available in Electron');
+    toastWarning('Discovery Unavailable', 'Network discovery is only available in the desktop application');
     return;
   }
 
@@ -1802,7 +1823,7 @@ async function startNetworkScan() {
   const endRange = parseInt(document.getElementById('discovery-end').value) || 254;
 
   if (!baseIp) {
-    alert('Please enter a base IP');
+    toastError('Missing Input', 'Please enter a base IP address');
     return;
   }
 
@@ -1980,6 +2001,9 @@ function setupMonitoringListener() {
       const elapsed = Date.now() - (uptimeTrackers.get(node.id)?.since || Date.now());
       node.uptime = formatDuration(elapsed);
 
+      // Track status history
+      trackStatusChange(node.id, node.name, currentStatus);
+
       return node;
     });
 
@@ -2029,6 +2053,78 @@ function formatDuration(ms) {
 }
 
 // ============================================
+// Status History Tracking
+// ============================================
+
+function trackStatusChange(nodeId, nodeName, newStatus) {
+  const now = Date.now();
+  let nodeHistory = statusHistory.get(nodeId);
+
+  if (!nodeHistory) {
+    // First time seeing this node
+    nodeHistory = {
+      lastStatus: newStatus,
+      lastChange: now,
+      history: [{ status: newStatus, time: now }]
+    };
+    statusHistory.set(nodeId, nodeHistory);
+    return;
+  }
+
+  // Check if status changed
+  if (nodeHistory.lastStatus !== newStatus) {
+    // Status changed! Record it
+    nodeHistory.history.push({ status: newStatus, time: now });
+
+    // Keep only last N entries
+    if (nodeHistory.history.length > MAX_HISTORY_ENTRIES) {
+      nodeHistory.history = nodeHistory.history.slice(-MAX_HISTORY_ENTRIES);
+    }
+
+    // Show toast notification for status change
+    if (newStatus) {
+      toastSuccess('Node Online', `"${nodeName}" is now online`);
+    } else {
+      toastError('Node Offline', `"${nodeName}" went offline`);
+    }
+
+    nodeHistory.lastStatus = newStatus;
+    nodeHistory.lastChange = now;
+  }
+}
+
+function getNodeStatusHistory(nodeId) {
+  return statusHistory.get(nodeId) || null;
+}
+
+function formatStatusHistory(nodeId) {
+  const history = statusHistory.get(nodeId);
+  if (!history || history.history.length === 0) {
+    return 'No history available';
+  }
+
+  // Get last 5 status changes
+  const recent = history.history.slice(-5).reverse();
+  return recent.map(entry => {
+    const time = new Date(entry.time).toLocaleTimeString();
+    const status = entry.status ? '🟢 Online' : '🔴 Offline';
+    return `${time}: ${status}`;
+  }).join('\n');
+}
+
+function getLastStatusChange(nodeId) {
+  const history = statusHistory.get(nodeId);
+  if (!history) return null;
+
+  const timeSince = Date.now() - history.lastChange;
+  return {
+    status: history.lastStatus,
+    since: history.lastChange,
+    duration: formatDuration(timeSince)
+  };
+}
+
+// ============================================
 // Utilities
 // ============================================
 
@@ -2041,6 +2137,115 @@ function togglePanel(id) {
   if (panel) {
     panel.classList.toggle('hidden');
   }
+}
+
+// ============================================
+// Toast Notifications
+// ============================================
+
+const toastIcons = {
+  success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>'
+};
+
+function showToast(type, title, message, duration = 4000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `
+    <div class="toast-icon">${toastIcons[type] || toastIcons.info}</div>
+    <div class="toast-content">
+      <div class="toast-title">${escapeHtml(title)}</div>
+      ${message ? `<div class="toast-message">${escapeHtml(message)}</div>` : ''}
+    </div>
+    <div class="toast-close" onclick="this.parentElement.remove()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 6L6 18M6 6l12 12"/>
+      </svg>
+    </div>
+  `;
+
+  container.appendChild(toast);
+
+  // Auto-dismiss
+  if (duration > 0) {
+    setTimeout(() => {
+      toast.classList.add('hiding');
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  return toast;
+}
+
+// Convenience functions
+function toastSuccess(title, message) { return showToast('success', title, message); }
+function toastError(title, message) { return showToast('error', title, message, 6000); }
+function toastWarning(title, message) { return showToast('warning', title, message, 5000); }
+function toastInfo(title, message) { return showToast('info', title, message); }
+
+// ============================================
+// Input Validation
+// ============================================
+
+function isValidIP(ip) {
+  if (!ip) return false;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every(part => {
+    const num = parseInt(part, 10);
+    return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
+  });
+}
+
+function isValidHostname(hostname) {
+  if (!hostname) return false;
+  // Allow IP addresses and valid hostnames
+  if (isValidIP(hostname)) return true;
+  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return hostnameRegex.test(hostname);
+}
+
+function isValidPort(port) {
+  const num = parseInt(port, 10);
+  return !isNaN(num) && num >= 1 && num <= 65535;
+}
+
+function validateNodeForm() {
+  const name = document.getElementById('node-name').value.trim();
+  const address = document.getElementById('node-address').value.trim();
+  const port = document.getElementById('node-port').value.trim();
+  const sshPort = document.getElementById('node-ssh-port').value.trim();
+
+  if (!name) {
+    toastError('Validation Error', 'Node name is required');
+    document.getElementById('node-name').focus();
+    return false;
+  }
+
+  if (address && !isValidHostname(address)) {
+    toastError('Validation Error', 'Invalid IP address or hostname');
+    document.getElementById('node-address').focus();
+    return false;
+  }
+
+  if (port && !isValidPort(port)) {
+    toastError('Validation Error', 'Port must be between 1 and 65535');
+    document.getElementById('node-port').focus();
+    return false;
+  }
+
+  if (sshPort && !isValidPort(sshPort)) {
+    toastError('Validation Error', 'SSH port must be between 1 and 65535');
+    document.getElementById('node-ssh-port').focus();
+    return false;
+  }
+
+  return true;
 }
 
 // ============================================

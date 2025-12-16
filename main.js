@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Client } = require('ssh2');
@@ -16,6 +16,72 @@ let mainWindow;
 // Configuration paths
 const getConfigPath = () => path.join(app.getPath('userData'), 'config.json');
 const getStatusPath = () => path.join(app.getPath('userData'), 'status.json');
+
+// ============================================
+// Password Encryption Utilities
+// ============================================
+
+function encryptPassword(password) {
+  if (!password) return null;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(password);
+      return encrypted.toString('base64');
+    }
+  } catch (e) {
+    console.error('Encryption failed:', e);
+  }
+  // Fallback: return as-is (not recommended for production)
+  return password;
+}
+
+function decryptPassword(encryptedPassword) {
+  if (!encryptedPassword) return null;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const buffer = Buffer.from(encryptedPassword, 'base64');
+      return safeStorage.decryptString(buffer);
+    }
+  } catch (e) {
+    // If decryption fails, it might be a plain text password (legacy)
+    return encryptedPassword;
+  }
+  return encryptedPassword;
+}
+
+function encryptConfigPasswords(config) {
+  if (!config || !config.nodes) return config;
+
+  const encrypted = JSON.parse(JSON.stringify(config));
+  encrypted.nodes = encrypted.nodes.map(node => {
+    if (node.sshPass && !node._encrypted) {
+      return {
+        ...node,
+        sshPass: encryptPassword(node.sshPass),
+        _encrypted: true
+      };
+    }
+    return node;
+  });
+  return encrypted;
+}
+
+function decryptConfigPasswords(config) {
+  if (!config || !config.nodes) return config;
+
+  const decrypted = JSON.parse(JSON.stringify(config));
+  decrypted.nodes = decrypted.nodes.map(node => {
+    if (node.sshPass && node._encrypted) {
+      return {
+        ...node,
+        sshPass: decryptPassword(node.sshPass),
+        _encrypted: false
+      };
+    }
+    return node;
+  });
+  return decrypted;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -85,22 +151,27 @@ ipcMain.handle('config:load', async () => {
         // Return default empty config
         return {
           settings: { showGrid: true, gridSize: 100, snapToGrid: true },
-          nodes: []
+          nodes: [],
+          connections: []
         };
       }
     }
     const data = fs.readFileSync(configPath, 'utf8');
-    return JSON.parse(data);
+    const config = JSON.parse(data);
+    // Decrypt passwords before sending to renderer
+    return decryptConfigPasswords(config);
   } catch (error) {
     console.error('Error loading config:', error);
-    return { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [] };
+    return { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [], connections: [] };
   }
 });
 
 ipcMain.handle('config:save', async (event, config) => {
   try {
     const configPath = getConfigPath();
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    // Encrypt passwords before saving
+    const encryptedConfig = encryptConfigPasswords(config);
+    fs.writeFileSync(configPath, JSON.stringify(encryptedConfig, null, 2));
     return { success: true };
   } catch (error) {
     console.error('Error saving config:', error);
@@ -148,8 +219,29 @@ ipcMain.handle('config:import', async () => {
 // IPC HANDLERS - SSH Connections
 // ============================================
 
+ipcMain.handle('ssh:browseKey', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select SSH Private Key',
+      properties: ['openFile'],
+      filters: [
+        { name: 'SSH Keys', extensions: ['pem', 'key', 'ppk', ''] },
+        { name: 'All Files', extensions: ['*'] }
+      ],
+      defaultPath: require('os').homedir() + '/.ssh'
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      return { success: true, path: result.filePaths[0] };
+    }
+    return { success: false, canceled: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
-  const { nodeId, host, port = 22, username, password, privateKey } = connectionInfo;
+  const { nodeId, host, port = 22, username, password, privateKeyPath, passphrase } = connectionInfo;
 
   return new Promise((resolve) => {
     const conn = new Client();
@@ -200,8 +292,17 @@ ipcMain.handle('ssh:connect', async (event, connectionInfo) => {
       keepaliveInterval: 10000
     };
 
-    if (privateKey) {
-      connectConfig.privateKey = privateKey;
+    // Handle private key authentication
+    if (privateKeyPath) {
+      try {
+        connectConfig.privateKey = fs.readFileSync(privateKeyPath);
+        if (passphrase) {
+          connectConfig.passphrase = passphrase;
+        }
+      } catch (keyError) {
+        resolve({ success: false, error: `Failed to read private key: ${keyError.message}` });
+        return;
+      }
     } else if (password) {
       connectConfig.password = password;
     }

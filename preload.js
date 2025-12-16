@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     write: (nodeId, data) => ipcRenderer.invoke('ssh:write', { nodeId, data }),
     resize: (nodeId, cols, rows) => ipcRenderer.invoke('ssh:resize', { nodeId, cols, rows }),
     disconnect: (nodeId) => ipcRenderer.invoke('ssh:disconnect', nodeId),
+    browseKey: () => ipcRenderer.invoke('ssh:browseKey'),
 
     // Event listeners for SSH data
     onData: (callback) => {
