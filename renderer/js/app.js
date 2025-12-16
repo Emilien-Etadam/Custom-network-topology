@@ -3,7 +3,7 @@
 // ============================================
 
 // State
-let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true }, nodes: [], connections: [] };
+let config = { settings: { showGrid: true, gridSize: 100, snapToGrid: true, theme: 'dark' }, nodes: [], connections: [] };
 let networkData = [];
 let terminals = new Map();
 let activeTerminal = null;
@@ -28,6 +28,19 @@ let scale = 1, pointX = 0, pointY = 0, isPanning = false, startX = 0, startY = 0
 // Drag Variables
 let isDragging = false, dragNode = null, dragStartX = 0, dragStartY = 0, nodeStartX = 0, nodeStartY = 0;
 
+// Multi-select state
+let selectedNodes = new Set();
+let isSelecting = false;
+let selectionStart = { x: 0, y: 0 };
+
+// Undo/Redo state
+let undoStack = [];
+let redoStack = [];
+const MAX_UNDO_HISTORY = 50;
+
+// Mini-map state
+let minimapVisible = false;
+
 // Grid System Constants
 const gridCols = [];
 for (let i = 0; i < 26; i++) gridCols.push(String.fromCharCode(65 + i));
@@ -47,6 +60,12 @@ async function init() {
   setupEventListeners();
   await loadConfig();
   setupMonitoringListener();
+
+  // Initialize theme
+  initTheme();
+
+  // Initialize minimap
+  initMinimap();
 
   // Check if running in Electron
   if (window.electronAPI) {
@@ -254,16 +273,32 @@ function setupEventListeners() {
     updateTransform();
   });
 
-  // Pan
+  // Pan and Multi-select
   viewport.addEventListener('mousedown', (e) => {
     if (e.target.closest('.node-container')) return;
     if (isDragging) return; // Don't start panning while dragging
+
+    // Shift+click starts selection rectangle
+    if (e.shiftKey) {
+      startSelectionRect(e);
+      return;
+    }
+
+    // Clear selection when clicking on empty area without shift
+    if (!e.shiftKey && !e.ctrlKey) {
+      clearSelection();
+    }
+
     isPanning = true;
     startX = e.clientX - pointX;
     startY = e.clientY - pointY;
   });
 
   window.addEventListener('mousemove', (e) => {
+    if (isSelecting) {
+      updateSelectionRect(e);
+      return;
+    }
     if (isDragging && dragNode) {
       handleNodeDrag(e);
       return;
@@ -273,9 +308,14 @@ function setupEventListeners() {
     pointX = e.clientX - startX;
     pointY = e.clientY - startY;
     updateTransform();
+    updateMinimap();
   });
 
-  window.addEventListener('mouseup', async () => {
+  window.addEventListener('mouseup', async (e) => {
+    if (isSelecting) {
+      endSelectionRect(e);
+      return;
+    }
     isPanning = false;
     if (isDragging && dragNode) {
       await endNodeDrag();
@@ -343,6 +383,49 @@ function setupEventListeners() {
   });
 
   document.getElementById('btn-monitoring').addEventListener('click', toggleMonitoring);
+  document.getElementById('btn-export-image').addEventListener('click', exportTopologyAsImage);
+  document.getElementById('btn-auto-layout').addEventListener('click', autoLayoutNodes);
+
+  // Theme toggle
+  document.getElementById('btn-theme').addEventListener('click', toggleTheme);
+
+  // Undo/Redo buttons
+  document.getElementById('btn-undo').addEventListener('click', undo);
+  document.getElementById('btn-redo').addEventListener('click', redo);
+
+  // Mini-map toggle
+  document.getElementById('btn-minimap').addEventListener('click', toggleMinimap);
+  document.getElementById('minimap-close').addEventListener('click', () => {
+    minimapVisible = false;
+    document.getElementById('minimap').classList.add('hidden');
+    document.getElementById('btn-minimap').classList.remove('active');
+  });
+
+  // Keyboard shortcuts for Undo/Redo
+  document.addEventListener('keydown', (e) => {
+    const isTyping = e.target.tagName === 'INPUT' ||
+                     e.target.tagName === 'TEXTAREA' ||
+                     e.target.tagName === 'SELECT' ||
+                     e.target.isContentEditable ||
+                     e.target.closest('.modal');
+
+    if (!isTyping) {
+      // Ctrl+Z for Undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      // Ctrl+Y or Ctrl+Shift+Z for Redo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+      }
+      // Escape to clear selection
+      if (e.key === 'Escape') {
+        clearSelection();
+      }
+    }
+  });
 
   // Search and filter
   document.getElementById('node-search').addEventListener('input', applyNodeFilter);
@@ -831,6 +914,11 @@ function endConnection(e) {
       );
 
       if (!existingConn) {
+        // Save state for undo
+        const sourceNode = config.nodes.find(n => n.id === connectionStart.nodeId);
+        const targetNode = config.nodes.find(n => n.id === targetNodeId);
+        saveStateForUndo(`Connect "${sourceNode?.name || connectionStart.nodeId}" to "${targetNode?.name || targetNodeId}"`);
+
         // Create new connection
         config.connections.push({
           id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -845,6 +933,8 @@ function endConnection(e) {
 
         saveConfig();
         renderTree(config.nodes);
+        updateMinimap();
+        toastSuccess('Connection Created', 'Nodes connected successfully');
       }
     }
   }
@@ -887,12 +977,17 @@ function deleteSelectedConnection() {
   const targetName = targetNode?.name || conn.targetNodeId;
 
   if (confirm(`Delete connection between "${sourceName}" and "${targetName}"?`)) {
+    // Save state for undo
+    saveStateForUndo(`Delete connection "${sourceName}" - "${targetName}"`);
+
     const idx = config.connections.findIndex(c => c.id === selectedConnectionId);
     if (idx !== -1) {
       config.connections.splice(idx, 1);
       selectedConnectionId = null;
       saveConfig();
       renderTree(config.nodes);
+      updateMinimap();
+      toastSuccess('Connection Deleted', 'Connection removed successfully');
     }
   }
 }
@@ -902,19 +997,32 @@ function deleteSelectedConnection() {
 // ============================================
 
 let dragOffsetX = 0, dragOffsetY = 0;
+let multiDragOffsets = new Map(); // For multi-select drag
 
 function startNodeDrag(e, node) {
   if (e.button !== 0) return; // Only left click
   e.stopPropagation();
   e.preventDefault();
 
+  // Ctrl+click toggles selection
+  if (e.ctrlKey || e.metaKey) {
+    toggleNodeSelection(node.id);
+    return;
+  }
+
+  // If clicking on a selected node, drag all selected nodes
+  // If clicking on an unselected node, clear selection and drag just that node
+  if (!selectedNodes.has(node.id)) {
+    clearSelection();
+  }
+
   isDragging = true;
   dragNode = node;
 
   // Get the node element and its current position
   const el = document.getElementById(`node-${node.id}`);
-  const viewport = document.getElementById('viewport');
-  const viewportRect = viewport.getBoundingClientRect();
+  const viewportEl = document.getElementById('viewport');
+  const viewportRect = viewportEl.getBoundingClientRect();
 
   // Use vw/vh based dimensions for consistency with grid labels
   const worldWidth = window.innerWidth;
@@ -931,6 +1039,22 @@ function startNodeDrag(e, node) {
   dragOffsetX = mouseWorldX - nodeX;
   dragOffsetY = mouseWorldY - nodeY;
 
+  // Calculate offsets for all selected nodes (for multi-drag)
+  multiDragOffsets.clear();
+  if (selectedNodes.size > 0 && selectedNodes.has(node.id)) {
+    selectedNodes.forEach(nodeId => {
+      const selectedNode = config.nodes.find(n => n.id === nodeId);
+      if (selectedNode) {
+        const snX = (selectedNode.x || 50) / 100 * worldWidth;
+        const snY = (selectedNode.y || 50) / 100 * worldHeight;
+        multiDragOffsets.set(nodeId, {
+          offsetX: mouseWorldX - snX,
+          offsetY: mouseWorldY - snY
+        });
+      }
+    });
+  }
+
   el.classList.add('dragging');
 
   // Prevent text selection during drag and set body class for cursor
@@ -942,8 +1066,8 @@ function handleNodeDrag(e) {
   if (!isDragging || !dragNode) return;
   e.preventDefault();
 
-  const viewport = document.getElementById('viewport');
-  const viewportRect = viewport.getBoundingClientRect();
+  const viewportEl = document.getElementById('viewport');
+  const viewportRect = viewportEl.getBoundingClientRect();
 
   // Use vw/vh based dimensions for consistency with grid labels
   const worldWidth = window.innerWidth;
@@ -953,25 +1077,54 @@ function handleNodeDrag(e) {
   const mouseWorldX = (e.clientX - viewportRect.left - pointX) / scale;
   const mouseWorldY = (e.clientY - viewportRect.top - pointY) / scale;
 
-  // Calculate new node position (subtract the initial offset)
-  let newX = ((mouseWorldX - dragOffsetX) / worldWidth) * 100;
-  let newY = ((mouseWorldY - dragOffsetY) / worldHeight) * 100;
+  // Multi-select drag
+  if (multiDragOffsets.size > 0) {
+    multiDragOffsets.forEach((offsets, nodeId) => {
+      const node = config.nodes.find(n => n.id === nodeId);
+      if (!node) return;
 
-  // Clamp values to keep node within bounds (allow full grid range)
-  newX = Math.max(1, Math.min(99, newX));
-  newY = Math.max(1, Math.min(250, newY)); // Grid extends to 250vh (50 rows * 5vh)
+      let newX = ((mouseWorldX - offsets.offsetX) / worldWidth) * 100;
+      let newY = ((mouseWorldY - offsets.offsetY) / worldHeight) * 100;
 
-  // Apply snap-to-grid if enabled
-  const snapped = snapToGrid(newX, newY);
+      // Clamp values
+      newX = Math.max(1, Math.min(99, newX));
+      newY = Math.max(1, Math.min(250, newY));
 
-  // Update visual position immediately
-  const el = document.getElementById(`node-${dragNode.id}`);
-  el.style.left = snapped.x + '%';
-  el.style.top = snapped.y + '%';
+      // Apply snap-to-grid if enabled
+      const snapped = snapToGrid(newX, newY);
 
-  // Store temporary position
-  dragNode._tempX = snapped.x;
-  dragNode._tempY = snapped.y;
+      // Update visual position
+      const el = document.getElementById(`node-${nodeId}`);
+      if (el) {
+        el.style.left = snapped.x + '%';
+        el.style.top = snapped.y + '%';
+      }
+
+      // Store temporary position
+      node._tempX = snapped.x;
+      node._tempY = snapped.y;
+    });
+  } else {
+    // Single node drag
+    let newX = ((mouseWorldX - dragOffsetX) / worldWidth) * 100;
+    let newY = ((mouseWorldY - dragOffsetY) / worldHeight) * 100;
+
+    // Clamp values to keep node within bounds (allow full grid range)
+    newX = Math.max(1, Math.min(99, newX));
+    newY = Math.max(1, Math.min(250, newY)); // Grid extends to 250vh (50 rows * 5vh)
+
+    // Apply snap-to-grid if enabled
+    const snapped = snapToGrid(newX, newY);
+
+    // Update visual position immediately
+    const el = document.getElementById(`node-${dragNode.id}`);
+    el.style.left = snapped.x + '%';
+    el.style.top = snapped.y + '%';
+
+    // Store temporary position
+    dragNode._tempX = snapped.x;
+    dragNode._tempY = snapped.y;
+  }
 
   // Update lines in real-time
   drawLines();
@@ -987,8 +1140,47 @@ async function endNodeDrag() {
   document.body.style.userSelect = '';
   document.body.classList.remove('dragging-node');
 
-  // Save the position if it changed
-  if (dragNode._tempX !== undefined) {
+  let hasChanges = false;
+
+  // Multi-select drag
+  if (multiDragOffsets.size > 0) {
+    // Check if any node moved
+    multiDragOffsets.forEach((_, nodeId) => {
+      const node = config.nodes.find(n => n.id === nodeId);
+      if (node && node._tempX !== undefined) {
+        hasChanges = true;
+      }
+    });
+
+    if (hasChanges) {
+      // Save state for undo
+      saveStateForUndo(`Move ${multiDragOffsets.size} node(s)`);
+
+      // Apply all position changes
+      multiDragOffsets.forEach((_, nodeId) => {
+        const node = config.nodes.find(n => n.id === nodeId);
+        if (node && node._tempX !== undefined) {
+          node.x = node._tempX;
+          node.y = node._tempY;
+          delete node._tempX;
+          delete node._tempY;
+
+          // Update networkData if it exists
+          const dataNode = networkData.find(n => n.id === nodeId);
+          if (dataNode) {
+            dataNode.x = node.x;
+            dataNode.y = node.y;
+          }
+        }
+      });
+    }
+  } else if (dragNode._tempX !== undefined) {
+    // Single node drag
+    hasChanges = true;
+
+    // Save state for undo
+    saveStateForUndo(`Move node "${dragNode.name || dragNode.id}"`);
+
     const newX = dragNode._tempX;
     const newY = dragNode._tempY;
 
@@ -1015,15 +1207,19 @@ async function endNodeDrag() {
     // Update dragNode itself
     dragNode.x = newX;
     dragNode.y = newY;
+  }
 
+  if (hasChanges) {
     // Save to disk and wait for completion
     await saveConfig();
+    updateMinimap();
   }
 
   isDragging = false;
   dragNode = null;
   dragOffsetX = 0;
   dragOffsetY = 0;
+  multiDragOffsets.clear();
 }
 
 // ============================================
@@ -1256,12 +1452,21 @@ function deleteNodeFromContext() {
   hideContextMenu();
 
   if (confirm(`Delete node "${contextMenuNode.name}"?`)) {
+    // Save state for undo
+    saveStateForUndo(`Delete node "${contextMenuNode.name}"`);
+
     const idx = config.nodes.findIndex(n => n.id === contextMenuNode.id);
     if (idx !== -1) {
+      // Also remove connections involving this node
+      config.connections = config.connections.filter(c =>
+        c.sourceNodeId !== contextMenuNode.id && c.targetNodeId !== contextMenuNode.id
+      );
       config.nodes.splice(idx, 1);
       saveConfig();
       renderTree(config.nodes);
       renderHostList(config.nodes);
+      updateMinimap();
+      toastSuccess('Node Deleted', `"${contextMenuNode.name}" has been removed`);
     }
   }
 }
@@ -1658,7 +1863,7 @@ function saveNode() {
   const linkType = document.getElementById('node-link-type').value || null;
   const linkSpeed = document.getElementById('node-link-speed').value || null;
 
-  // Validation
+  // Validation first (before saving undo state)
   if (!name) {
     toastError('Validation Error', 'Node name is required');
     document.getElementById('node-name').focus();
@@ -1707,6 +1912,9 @@ function saveNode() {
     linkSpeed,
     ports
   };
+
+  // Save state for undo before making changes
+  saveStateForUndo(id ? `Edit node "${name}"` : `Add node "${name}"`);
 
   if (id) {
     // Update existing node
@@ -1948,6 +2156,281 @@ function updateSnapButton() {
   } else {
     btn.classList.remove('active');
   }
+}
+
+// ============================================
+// Export Topology as Image
+// ============================================
+
+async function exportTopologyAsImage() {
+  toastInfo('Exporting...', 'Preparing topology image');
+
+  // Get the world element containing all nodes and connections
+  const worldEl = document.getElementById('world');
+  const svgEl = document.getElementById('connections-layer');
+
+  if (!worldEl || config.nodes.length === 0) {
+    toastError('Export Failed', 'No topology to export');
+    return;
+  }
+
+  // Calculate bounds of all nodes
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  config.nodes.forEach(node => {
+    const x = (node.x / 100) * 10000;
+    const y = (node.y / 100) * 10000;
+    minX = Math.min(minX, x - 60);
+    minY = Math.min(minY, y - 60);
+    maxX = Math.max(maxX, x + 60);
+    maxY = Math.max(maxY, y + 60);
+  });
+
+  const padding = 50;
+  const width = maxX - minX + padding * 2;
+  const height = maxY - minY + padding * 2;
+
+  // Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // Fill background
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, width, height);
+
+  // Draw grid (optional)
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  const gridSize = 100;
+  for (let x = 0; x < width; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y < height; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  // Draw connections
+  (config.connections || []).forEach(conn => {
+    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
+    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
+    if (!sourceNode || !targetNode) return;
+
+    const x1 = (sourceNode.x / 100) * 10000 - minX + padding;
+    const y1 = (sourceNode.y / 100) * 10000 - minY + padding;
+    const x2 = (targetNode.x / 100) * 10000 - minX + padding;
+    const y2 = (targetNode.y / 100) * 10000 - minY + padding;
+
+    // Get status for color
+    const sourceData = networkData.find(n => n.id === sourceNode.id);
+    const targetData = networkData.find(n => n.id === targetNode.id);
+    const isOnline = sourceData?.status && targetData?.status;
+    const color = conn.isFailover ? '#fbbf24' : (isOnline ? '#22c55e' : '#ef4444');
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6;
+
+    // Draw bezier curve
+    ctx.beginPath();
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const cpY = Math.min(y1, y2) - 50;
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(midX, cpY, x2, y2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Draw link label if available
+    if (conn.linkType || conn.linkSpeed) {
+      const labelX = midX;
+      const labelY = (y1 + y2) / 2 - 10;
+      const labelText = [conn.linkType, conn.linkSpeed].filter(Boolean).join(' ');
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      const textWidth = ctx.measureText(labelText).width + 10;
+      ctx.fillRect(labelX - textWidth / 2, labelY - 8, textWidth, 16);
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(labelText, labelX, labelY + 4);
+    }
+  });
+
+  // Draw nodes
+  config.nodes.forEach(node => {
+    const x = (node.x / 100) * 10000 - minX + padding;
+    const y = (node.y / 100) * 10000 - minY + padding;
+
+    // Get status
+    const nodeData = networkData.find(n => n.id === node.id);
+    const isOnline = nodeData?.status;
+
+    // Node background
+    const gradient = ctx.createLinearGradient(x - 50, y - 50, x + 50, y + 50);
+    gradient.addColorStop(0, 'rgba(30, 41, 59, 0.95)');
+    gradient.addColorStop(1, 'rgba(15, 23, 42, 0.95)');
+    ctx.fillStyle = gradient;
+
+    // Rounded rectangle
+    const w = 100, h = 100, r = 12;
+    ctx.beginPath();
+    ctx.moveTo(x - w/2 + r, y - h/2);
+    ctx.lineTo(x + w/2 - r, y - h/2);
+    ctx.quadraticCurveTo(x + w/2, y - h/2, x + w/2, y - h/2 + r);
+    ctx.lineTo(x + w/2, y + h/2 - r);
+    ctx.quadraticCurveTo(x + w/2, y + h/2, x + w/2 - r, y + h/2);
+    ctx.lineTo(x - w/2 + r, y + h/2);
+    ctx.quadraticCurveTo(x - w/2, y + h/2, x - w/2, y + h/2 - r);
+    ctx.lineTo(x - w/2, y - h/2 + r);
+    ctx.quadraticCurveTo(x - w/2, y - h/2, x - w/2 + r, y - h/2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = isOnline ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Status indicator
+    ctx.fillStyle = isOnline ? '#22c55e' : '#ef4444';
+    ctx.beginPath();
+    ctx.arc(x + 40, y - 40, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Node name
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(node.name || 'Unknown', x, y + 30);
+
+    // Node address
+    ctx.fillStyle = '#64748b';
+    ctx.font = '9px monospace';
+    ctx.fillText(node.address || '', x, y + 42);
+  });
+
+  // Convert to blob and download
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `topology-${new Date().toISOString().slice(0, 10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toastSuccess('Export Complete', 'Topology image saved');
+  }, 'image/png');
+}
+
+// ============================================
+// Auto Layout
+// ============================================
+
+function autoLayoutNodes() {
+  if (config.nodes.length === 0) {
+    toastWarning('No Nodes', 'Add some nodes first');
+    return;
+  }
+
+  // Save state for undo
+  saveStateForUndo('Auto-layout nodes');
+
+  // Build adjacency map from connections
+  const connections = config.connections || [];
+  const adjacency = new Map();
+
+  config.nodes.forEach(node => {
+    adjacency.set(node.id, new Set());
+  });
+
+  connections.forEach(conn => {
+    if (adjacency.has(conn.sourceNodeId) && adjacency.has(conn.targetNodeId)) {
+      adjacency.get(conn.sourceNodeId).add(conn.targetNodeId);
+      adjacency.get(conn.targetNodeId).add(conn.sourceNodeId);
+    }
+  });
+
+  // Find root nodes (nodes with no incoming connections or most connections)
+  let rootNodes = config.nodes.filter(node => {
+    const incoming = connections.filter(c => c.targetNodeId === node.id).length;
+    return incoming === 0;
+  });
+
+  if (rootNodes.length === 0) {
+    // No clear root, use the node with most connections
+    rootNodes = [config.nodes.reduce((best, node) => {
+      const conns = adjacency.get(node.id)?.size || 0;
+      const bestConns = adjacency.get(best.id)?.size || 0;
+      return conns > bestConns ? node : best;
+    }, config.nodes[0])];
+  }
+
+  // BFS to assign levels
+  const levels = new Map();
+  const visited = new Set();
+  let queue = rootNodes.map(n => ({ id: n.id, level: 0 }));
+
+  while (queue.length > 0) {
+    const { id, level } = queue.shift();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    levels.set(id, level);
+
+    const neighbors = adjacency.get(id) || new Set();
+    neighbors.forEach(neighborId => {
+      if (!visited.has(neighborId)) {
+        queue.push({ id: neighborId, level: level + 1 });
+      }
+    });
+  }
+
+  // Handle disconnected nodes
+  config.nodes.forEach(node => {
+    if (!levels.has(node.id)) {
+      levels.set(node.id, 0);
+    }
+  });
+
+  // Group nodes by level
+  const nodesByLevel = new Map();
+  levels.forEach((level, nodeId) => {
+    if (!nodesByLevel.has(level)) {
+      nodesByLevel.set(level, []);
+    }
+    nodesByLevel.get(level).push(nodeId);
+  });
+
+  // Position nodes
+  const levelSpacing = 15; // vertical spacing in %
+  const startY = 10;
+  const startX = 50; // center
+
+  nodesByLevel.forEach((nodeIds, level) => {
+    const count = nodeIds.length;
+    const totalWidth = count * 12; // spacing between nodes in %
+    const startXForLevel = startX - totalWidth / 2 + 6;
+
+    nodeIds.forEach((nodeId, idx) => {
+      const node = config.nodes.find(n => n.id === nodeId);
+      if (node) {
+        node.x = Math.max(5, Math.min(95, startXForLevel + idx * 12));
+        node.y = Math.max(5, Math.min(95, startY + level * levelSpacing));
+      }
+    });
+  });
+
+  saveConfig();
+  renderTree(config.nodes);
+  toastSuccess('Layout Applied', `Organized ${config.nodes.length} nodes in ${nodesByLevel.size} levels`);
 }
 
 // ============================================
@@ -2246,6 +2729,415 @@ function validateNodeForm() {
   }
 
   return true;
+}
+
+// ============================================
+// Theme Toggle
+// ============================================
+
+function initTheme() {
+  const savedTheme = config.settings?.theme || localStorage.getItem('theme') || 'dark';
+  applyTheme(savedTheme);
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const themeIcon = document.getElementById('theme-icon');
+  if (themeIcon) {
+    // Update icon based on theme
+    themeIcon.setAttribute('data-lucide', theme === 'dark' ? 'moon' : 'sun');
+    lucide.createIcons();
+  }
+  config.settings.theme = theme;
+  localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme);
+  saveConfig();
+  toastInfo('Theme Changed', `Switched to ${newTheme} mode`);
+}
+
+// ============================================
+// Multi-Select Functions
+// ============================================
+
+function startSelectionRect(e) {
+  isSelecting = true;
+  const viewportRect = viewport.getBoundingClientRect();
+
+  // Calculate position in world coordinates
+  selectionStart.x = (e.clientX - viewportRect.left - pointX) / scale;
+  selectionStart.y = (e.clientY - viewportRect.top - pointY) / scale;
+
+  const rect = document.getElementById('selection-rect');
+  rect.style.left = selectionStart.x + 'px';
+  rect.style.top = selectionStart.y + 'px';
+  rect.style.width = '0px';
+  rect.style.height = '0px';
+  rect.classList.remove('hidden');
+}
+
+function updateSelectionRect(e) {
+  if (!isSelecting) return;
+
+  const viewportRect = viewport.getBoundingClientRect();
+  const currentX = (e.clientX - viewportRect.left - pointX) / scale;
+  const currentY = (e.clientY - viewportRect.top - pointY) / scale;
+
+  const rect = document.getElementById('selection-rect');
+  const x = Math.min(selectionStart.x, currentX);
+  const y = Math.min(selectionStart.y, currentY);
+  const width = Math.abs(currentX - selectionStart.x);
+  const height = Math.abs(currentY - selectionStart.y);
+
+  rect.style.left = x + 'px';
+  rect.style.top = y + 'px';
+  rect.style.width = width + 'px';
+  rect.style.height = height + 'px';
+
+  // Highlight nodes inside selection rectangle
+  highlightNodesInRect(x, y, width, height);
+}
+
+function endSelectionRect(e) {
+  if (!isSelecting) return;
+  isSelecting = false;
+
+  const rect = document.getElementById('selection-rect');
+  rect.classList.add('hidden');
+
+  // Finalize selection
+  const viewportRect = viewport.getBoundingClientRect();
+  const currentX = (e.clientX - viewportRect.left - pointX) / scale;
+  const currentY = (e.clientY - viewportRect.top - pointY) / scale;
+
+  const x = Math.min(selectionStart.x, currentX);
+  const y = Math.min(selectionStart.y, currentY);
+  const width = Math.abs(currentX - selectionStart.x);
+  const height = Math.abs(currentY - selectionStart.y);
+
+  selectNodesInRect(x, y, width, height);
+}
+
+function highlightNodesInRect(rectX, rectY, rectW, rectH) {
+  document.querySelectorAll('.node-container').forEach(el => {
+    const nodeId = el.dataset.nodeId;
+    const node = config.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    // Calculate node position in world pixels
+    const worldWidth = window.innerWidth;
+    const worldHeight = window.innerHeight;
+    const nodeX = (node.x / 100) * worldWidth;
+    const nodeY = (node.y / 100) * worldHeight;
+
+    // Check if node is inside rect
+    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
+                     nodeY >= rectY && nodeY <= rectY + rectH;
+
+    if (isInside) {
+      el.classList.add('selected');
+    } else if (!selectedNodes.has(nodeId)) {
+      el.classList.remove('selected');
+    }
+  });
+}
+
+function selectNodesInRect(rectX, rectY, rectW, rectH) {
+  const worldWidth = window.innerWidth;
+  const worldHeight = window.innerHeight;
+
+  config.nodes.forEach(node => {
+    const nodeX = (node.x / 100) * worldWidth;
+    const nodeY = (node.y / 100) * worldHeight;
+
+    const isInside = nodeX >= rectX && nodeX <= rectX + rectW &&
+                     nodeY >= rectY && nodeY <= rectY + rectH;
+
+    if (isInside) {
+      selectedNodes.add(node.id);
+    }
+  });
+
+  updateSelectionVisuals();
+
+  if (selectedNodes.size > 0) {
+    toastInfo('Selection', `${selectedNodes.size} node(s) selected`);
+  }
+}
+
+function toggleNodeSelection(nodeId) {
+  if (selectedNodes.has(nodeId)) {
+    selectedNodes.delete(nodeId);
+  } else {
+    selectedNodes.add(nodeId);
+  }
+  updateSelectionVisuals();
+}
+
+function clearSelection() {
+  selectedNodes.clear();
+  updateSelectionVisuals();
+}
+
+function updateSelectionVisuals() {
+  document.querySelectorAll('.node-container').forEach(el => {
+    const nodeId = el.dataset.nodeId;
+    if (selectedNodes.has(nodeId)) {
+      el.classList.add('selected');
+    } else {
+      el.classList.remove('selected');
+    }
+  });
+}
+
+// ============================================
+// Undo/Redo System
+// ============================================
+
+function saveStateForUndo(actionName = 'Change') {
+  // Deep clone current state
+  const state = {
+    action: actionName,
+    timestamp: Date.now(),
+    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    connections: JSON.parse(JSON.stringify(config.connections))
+  };
+
+  undoStack.push(state);
+
+  // Limit stack size
+  if (undoStack.length > MAX_UNDO_HISTORY) {
+    undoStack.shift();
+  }
+
+  // Clear redo stack when new action is performed
+  redoStack = [];
+
+  updateUndoRedoButtons();
+}
+
+function undo() {
+  if (undoStack.length === 0) {
+    toastWarning('Undo', 'Nothing to undo');
+    return;
+  }
+
+  // Save current state to redo stack
+  const currentState = {
+    action: 'Current',
+    timestamp: Date.now(),
+    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    connections: JSON.parse(JSON.stringify(config.connections))
+  };
+  redoStack.push(currentState);
+
+  // Restore previous state
+  const previousState = undoStack.pop();
+  config.nodes = previousState.nodes;
+  config.connections = previousState.connections;
+
+  // Re-render
+  renderTree(config.nodes);
+  renderHostList(config.nodes);
+  saveConfig();
+  updateMinimap();
+
+  updateUndoRedoButtons();
+  toastInfo('Undo', `Reverted: ${previousState.action}`);
+}
+
+function redo() {
+  if (redoStack.length === 0) {
+    toastWarning('Redo', 'Nothing to redo');
+    return;
+  }
+
+  // Save current state to undo stack
+  const currentState = {
+    action: 'Current',
+    timestamp: Date.now(),
+    nodes: JSON.parse(JSON.stringify(config.nodes)),
+    connections: JSON.parse(JSON.stringify(config.connections))
+  };
+  undoStack.push(currentState);
+
+  // Restore next state
+  const nextState = redoStack.pop();
+  config.nodes = nextState.nodes;
+  config.connections = nextState.connections;
+
+  // Re-render
+  renderTree(config.nodes);
+  renderHostList(config.nodes);
+  saveConfig();
+  updateMinimap();
+
+  updateUndoRedoButtons();
+  toastInfo('Redo', `Restored changes`);
+}
+
+function updateUndoRedoButtons() {
+  const undoBtn = document.getElementById('btn-undo');
+  const redoBtn = document.getElementById('btn-redo');
+
+  if (undoBtn) {
+    undoBtn.disabled = undoStack.length === 0;
+    undoBtn.title = undoStack.length > 0
+      ? `Undo: ${undoStack[undoStack.length - 1].action} (Ctrl+Z)`
+      : 'Nothing to undo (Ctrl+Z)';
+  }
+
+  if (redoBtn) {
+    redoBtn.disabled = redoStack.length === 0;
+    redoBtn.title = redoStack.length > 0
+      ? `Redo (Ctrl+Y)`
+      : 'Nothing to redo (Ctrl+Y)';
+  }
+}
+
+// ============================================
+// Mini-map
+// ============================================
+
+function initMinimap() {
+  const minimapCanvas = document.getElementById('minimap-canvas');
+  const minimap = document.getElementById('minimap');
+
+  if (!minimapCanvas || !minimap) return;
+
+  // Make minimap clickable for navigation
+  minimap.addEventListener('click', (e) => {
+    if (e.target.id === 'minimap-close' || e.target.closest('#minimap-close')) return;
+
+    const rect = minimapCanvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    // Calculate world position
+    const minimapWidth = minimapCanvas.width;
+    const minimapHeight = minimapCanvas.height;
+    const worldWidth = window.innerWidth * 3; // 300% of viewport
+    const worldHeight = window.innerHeight * 3;
+
+    const worldX = (clickX / minimapWidth) * worldWidth;
+    const worldY = (clickY / minimapHeight) * worldHeight;
+
+    // Center viewport on this position
+    const viewportRect = viewport.getBoundingClientRect();
+    pointX = viewportRect.width / 2 - worldX * scale;
+    pointY = viewportRect.height / 2 - worldY * scale;
+
+    updateTransform();
+    updateMinimap();
+  });
+
+  lucide.createIcons();
+}
+
+function toggleMinimap() {
+  minimapVisible = !minimapVisible;
+  const minimap = document.getElementById('minimap');
+  const btn = document.getElementById('btn-minimap');
+
+  if (minimapVisible) {
+    minimap.classList.remove('hidden');
+    btn.classList.add('active');
+    updateMinimap();
+  } else {
+    minimap.classList.add('hidden');
+    btn.classList.remove('active');
+  }
+}
+
+function updateMinimap() {
+  if (!minimapVisible) return;
+
+  const canvas = document.getElementById('minimap-canvas');
+  const viewportIndicator = document.getElementById('minimap-viewport');
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  const minimapWidth = 200;
+  const minimapHeight = 150;
+
+  canvas.width = minimapWidth;
+  canvas.height = minimapHeight;
+
+  // Clear canvas
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  ctx.fillStyle = isDark ? '#1e293b' : '#f1f5f9';
+  ctx.fillRect(0, 0, minimapWidth, minimapHeight);
+
+  // World dimensions (300% of viewport)
+  const worldWidth = window.innerWidth * 3;
+  const worldHeight = window.innerHeight * 3;
+
+  // Scale factor for minimap
+  const scaleX = minimapWidth / worldWidth;
+  const scaleY = minimapHeight / worldHeight;
+
+  // Draw connections
+  ctx.strokeStyle = isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.4)';
+  ctx.lineWidth = 1;
+
+  config.connections.forEach(conn => {
+    const sourceNode = config.nodes.find(n => n.id === conn.sourceNodeId);
+    const targetNode = config.nodes.find(n => n.id === conn.targetNodeId);
+    if (!sourceNode || !targetNode) return;
+
+    const x1 = (sourceNode.x / 100) * window.innerWidth * scaleX;
+    const y1 = (sourceNode.y / 100) * window.innerHeight * scaleY;
+    const x2 = (targetNode.x / 100) * window.innerWidth * scaleX;
+    const y2 = (targetNode.y / 100) * window.innerHeight * scaleY;
+
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  });
+
+  // Draw nodes
+  config.nodes.forEach(node => {
+    const x = (node.x / 100) * window.innerWidth * scaleX;
+    const y = (node.y / 100) * window.innerHeight * scaleY;
+
+    // Node color based on status
+    const isOnline = node.status === true ||
+                     (networkData.find(n => n.id === node.id)?.status === true);
+
+    ctx.fillStyle = selectedNodes.has(node.id) ? '#3b82f6' :
+                    isOnline ? '#22c55e' : '#ef4444';
+
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Update viewport indicator
+  if (viewportIndicator) {
+    const viewportRect = viewport.getBoundingClientRect();
+
+    // Calculate visible area in world coordinates
+    const visibleX = -pointX / scale;
+    const visibleY = -pointY / scale;
+    const visibleWidth = viewportRect.width / scale;
+    const visibleHeight = viewportRect.height / scale;
+
+    // Convert to minimap coordinates
+    const indicatorX = visibleX * scaleX;
+    const indicatorY = visibleY * scaleY;
+    const indicatorW = visibleWidth * scaleX;
+    const indicatorH = visibleHeight * scaleY;
+
+    viewportIndicator.style.left = Math.max(0, indicatorX) + 'px';
+    viewportIndicator.style.top = Math.max(0, indicatorY) + 'px';
+    viewportIndicator.style.width = Math.min(minimapWidth - indicatorX, indicatorW) + 'px';
+    viewportIndicator.style.height = Math.min(minimapHeight - indicatorY, indicatorH) + 'px';
+  }
 }
 
 // ============================================
