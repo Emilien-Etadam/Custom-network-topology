@@ -3061,6 +3061,13 @@ function setupMonitoringListener() {
         node.linkType = configNode.linkType;
         node.linkSpeed = configNode.linkSpeed;
         node.ports = configNode.ports;
+        // Container properties - IMPORTANT for nested nodes
+        node.isContainer = configNode.isContainer;
+        node.containerType = configNode.containerType;
+        node.containerId = configNode.containerId;
+        node.zoneId = configNode.zoneId;
+        node.zones = configNode.zones;
+        node.expanded = configNode.expanded;
       }
 
       // Update uptime tracking
@@ -3137,38 +3144,40 @@ function formatDuration(ms) {
 // ============================================
 
 function trackStatusChange(nodeId, nodeName, newStatus) {
+  // Normalize status to boolean to avoid undefined/null comparison issues
+  const normalizedStatus = newStatus === true;
   const now = Date.now();
   let nodeHistory = statusHistory.get(nodeId);
 
   if (!nodeHistory) {
-    // First time seeing this node
+    // First time seeing this node - don't show notification
     nodeHistory = {
-      lastStatus: newStatus,
+      lastStatus: normalizedStatus,
       lastChange: now,
-      history: [{ status: newStatus, time: now }]
+      history: [{ status: normalizedStatus, time: now }]
     };
     statusHistory.set(nodeId, nodeHistory);
     return;
   }
 
-  // Check if status changed
-  if (nodeHistory.lastStatus !== newStatus) {
+  // Check if status actually changed (both must be boolean now)
+  if (nodeHistory.lastStatus !== normalizedStatus) {
     // Status changed! Record it
-    nodeHistory.history.push({ status: newStatus, time: now });
+    nodeHistory.history.push({ status: normalizedStatus, time: now });
 
     // Keep only last N entries
     if (nodeHistory.history.length > MAX_HISTORY_ENTRIES) {
       nodeHistory.history = nodeHistory.history.slice(-MAX_HISTORY_ENTRIES);
     }
 
-    // Show toast notification for status change
-    if (newStatus) {
+    // Show toast notification for status change (only after initial state)
+    if (normalizedStatus) {
       toastSuccess('Node Online', `"${nodeName}" is now online`);
     } else {
       toastError('Node Offline', `"${nodeName}" went offline`);
     }
 
-    nodeHistory.lastStatus = newStatus;
+    nodeHistory.lastStatus = normalizedStatus;
     nodeHistory.lastChange = now;
   }
 }
