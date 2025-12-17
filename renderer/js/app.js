@@ -318,7 +318,7 @@ function setupEventListeners() {
     }
     isPanning = false;
     if (isDragging && dragNode) {
-      await endNodeDrag();
+      await endNodeDrag(e);
     }
   });
 
@@ -482,7 +482,218 @@ function renderTree(nodes) {
     levels[l] = nodes.filter(n => n.level === l);
   }
 
-  nodes.forEach(node => {
+  // Helper function to generate ports HTML
+  function generatePortsHtml(node) {
+    const ports = node.ports || [];
+    const portsByPosition = { top: [], bottom: [], left: [], right: [] };
+    ports.forEach(port => {
+      if (portsByPosition[port.side]) {
+        portsByPosition[port.side].push(port);
+      }
+    });
+
+    const totalPorts = ports.length;
+    const hasMultiplePorts = totalPorts >= 2;
+
+    let portsHtml = '<div class="node-ports">';
+    Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
+      const count = sidePorts.length;
+      sidePorts.forEach((port, idx) => {
+        const isConnected = config.connections.some(c =>
+          (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
+          (c.targetNodeId === node.id && c.targetPortId === port.id)
+        );
+
+        let posPercent = 50;
+        if (count > 1) {
+          posPercent = ((idx + 1) / (count + 1)) * 100;
+        }
+
+        let posStyle = '';
+        if (side === 'top' || side === 'bottom') {
+          posStyle = `left: ${posPercent}%; transform: translateX(-50%);`;
+          if (side === 'top') posStyle += ' top: -6px;';
+          else posStyle += ' bottom: -6px;';
+        } else {
+          posStyle = `top: ${posPercent}%; transform: translateY(-50%);`;
+          if (side === 'left') posStyle += ' left: -6px;';
+          else posStyle += ' right: -6px;';
+        }
+
+        const alwaysVisible = (side === 'bottom' || hasMultiplePorts) ? 'always-visible' : '';
+
+        portsHtml += `
+          <div class="port-handle ${isConnected ? 'connected' : ''}"
+               style="${posStyle}"
+               data-node-id="${node.id}"
+               data-port-id="${port.id}"
+               data-side="${side}"
+               data-index="${idx}"
+               title="${escapeHtml(port.name)}"></div>
+          <span class="port-label ${alwaysVisible}" style="${posStyle}">${escapeHtml(port.name)}</span>
+        `;
+      });
+    });
+    portsHtml += '</div>';
+    return portsHtml;
+  }
+
+  // Helper function to generate icon HTML
+  function generateIconHtml(node) {
+    if (node.iconType === 'url') {
+      return `<img src="${escapeHtml(node.icon || '')}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
+    } else if (node.iconType === 'svg') {
+      return node.icon || '<i data-lucide="help-circle" class="w-8 h-8"></i>';
+    } else {
+      return `<i data-lucide="${escapeHtml(node.icon || 'circle')}" class="w-8 h-8"></i>`;
+    }
+  }
+
+  // Separate containers from regular nodes
+  const containerNodes = nodes.filter(n => n.isContainer);
+  const childNodes = nodes.filter(n => n.containerId && !n.isContainer);
+  const standaloneNodes = nodes.filter(n => !n.isContainer && !n.containerId);
+
+  // First, render container nodes
+  containerNodes.forEach(node => {
+    const el = document.createElement('div');
+    el.id = `node-${node.id}`;
+    el.className = `node-container card is-container container-${node.containerType || 'custom'}`;
+    el.dataset.nodeId = node.id;
+    el.dataset.isContainer = 'true';
+
+    // Get children of this container
+    const children = childNodes.filter(c => c.containerId === node.id);
+    const isExpanded = node.expanded !== false;
+
+    let leftPos, topPos;
+    if (node.x !== null && node.x !== undefined) {
+      leftPos = node.x + '%';
+    } else {
+      const levelNodes = levels[node.level];
+      const idx = levelNodes.indexOf(node);
+      const slice = 100 / (levelNodes.length + 1);
+      leftPos = (slice * (idx + 1)) + '%';
+    }
+    if (node.y !== null && node.y !== undefined) {
+      topPos = node.y + '%';
+    } else {
+      topPos = (maxLevel === 0) ? '50%' : (85 - (node.level * (70 / maxLevel))) + '%';
+    }
+
+    el.style.left = leftPos;
+    el.style.top = topPos;
+    el.style.pointerEvents = 'auto';
+
+    const isUp = node.status === true;
+    const iconHtml = generateIconHtml(node);
+    const portsHtml = generatePortsHtml(node);
+
+    // Container type labels
+    const containerTypeLabels = {
+      proxmox: 'Proxmox',
+      docker: 'Docker',
+      kubernetes: 'K8s',
+      vmware: 'VMware',
+      rack: 'Rack',
+      cloud: 'Cloud',
+      custom: 'Container'
+    };
+
+    // Generate children HTML
+    let childrenHtml = '';
+    if (isExpanded && children.length > 0) {
+      children.forEach((child, idx) => {
+        const childIsUp = child.status === true;
+        const childIconHtml = generateIconHtml(child);
+        childrenHtml += `
+          <div class="child-node" data-node-id="${child.id}" data-child-index="${idx}">
+            <div class="child-node-icon">
+              ${childIconHtml}
+            </div>
+            <div class="child-node-info">
+              <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
+              <div class="child-node-address">${escapeHtml(child.address || '')}</div>
+            </div>
+            <div class="child-node-status ${childIsUp ? 'online' : 'offline'}">
+              ${childIsUp ? 'ON' : 'OFF'}
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    el.innerHTML = `
+      ${portsHtml}
+      <div class="container-header">
+        <div class="container-header-left">
+          <button class="container-toggle" onclick="toggleContainerExpand('${node.id}')">
+            <i data-lucide="${isExpanded ? 'chevron-down' : 'chevron-right'}" class="w-4 h-4"></i>
+          </button>
+          <div class="container-icon">
+            ${iconHtml}
+          </div>
+          <div class="container-title">
+            <div class="container-name">${escapeHtml(node.name || node.id)}</div>
+            <div class="container-type-badge">${containerTypeLabels[node.containerType] || 'Container'}</div>
+          </div>
+        </div>
+        <div class="container-header-right">
+          <span class="container-count">${children.length} node${children.length !== 1 ? 's' : ''}</span>
+          <div class="container-status ${isUp ? 'online' : 'offline'}">
+            ${isUp ? 'ONLINE' : 'OFFLINE'}
+          </div>
+        </div>
+      </div>
+      <div class="container-content ${isExpanded ? '' : 'collapsed'}">
+        ${childrenHtml || '<div class="container-empty">Drop nodes here or create new ones</div>'}
+        <div class="container-drop-zone" data-container-id="${node.id}">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>Drop node here</span>
+        </div>
+      </div>
+    `;
+
+    // Event listeners for container
+    el.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('port-handle')) return;
+      if (e.target.closest('.container-toggle')) return;
+      if (e.target.closest('.child-node')) return;
+      startNodeDrag(e, node);
+    });
+    el.addEventListener('contextmenu', (e) => showNodeContextMenu(e, node));
+    el.addEventListener('dblclick', (e) => {
+      if (!e.target.closest('.child-node') && !e.target.closest('.container-toggle')) {
+        openNodeModal(node);
+      }
+    });
+
+    // Child node event listeners
+    el.querySelectorAll('.child-node').forEach(childEl => {
+      const childId = childEl.dataset.nodeId;
+      const childNode = children.find(c => c.id === childId);
+      if (childNode) {
+        childEl.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          openNodeModal(childNode);
+        });
+        childEl.addEventListener('contextmenu', (e) => {
+          e.stopPropagation();
+          showNodeContextMenu(e, childNode);
+        });
+      }
+    });
+
+    // Port event listeners
+    el.querySelectorAll('.port-handle').forEach(portEl => {
+      portEl.addEventListener('mousedown', (e) => startConnection(e, node, portEl));
+    });
+
+    container.appendChild(el);
+  });
+
+  // Then render standalone nodes (not in any container)
+  standaloneNodes.forEach(node => {
     const el = document.createElement('div');
     el.id = `node-${node.id}`;
     el.className = 'node-container card';
@@ -511,74 +722,9 @@ function renderTree(nodes) {
 
     const isUp = node.status === true;
     const isFailover = node.activeParentId === node.secondaryParentId && node.secondaryParentId !== null;
-
-    let iconHtml;
-    if (node.iconType === 'url') {
-      iconHtml = `<img src="${escapeHtml(node.icon || '')}" class="w-full h-full object-cover" onerror="this.style.display='none'">`;
-    } else if (node.iconType === 'svg') {
-      iconHtml = node.icon || '<i data-lucide="help-circle" class="w-8 h-8"></i>';
-    } else {
-      iconHtml = `<i data-lucide="${escapeHtml(node.icon || 'circle')}" class="w-8 h-8"></i>`;
-    }
-
+    const iconHtml = generateIconHtml(node);
     const gridCell = getGridCell(node.x || 50, node.y || 50);
-
-    // Render port handles
-    const ports = node.ports || [];
-    const portsByPosition = { top: [], bottom: [], left: [], right: [] };
-    ports.forEach(port => {
-      if (portsByPosition[port.side]) {
-        portsByPosition[port.side].push(port);
-      }
-    });
-
-    // Determine if labels should always be visible (multiple ports or output ports)
-    const totalPorts = ports.length;
-    const hasMultiplePorts = totalPorts >= 2;
-
-    let portsHtml = '<div class="node-ports">';
-    Object.entries(portsByPosition).forEach(([side, sidePorts]) => {
-      const count = sidePorts.length;
-      sidePorts.forEach((port, idx) => {
-        const isConnected = config.connections.some(c =>
-          (c.sourceNodeId === node.id && c.sourcePortId === port.id) ||
-          (c.targetNodeId === node.id && c.targetPortId === port.id)
-        );
-
-        // Calculate position percentage for this port
-        let posPercent = 50;
-        if (count > 1) {
-          posPercent = ((idx + 1) / (count + 1)) * 100;
-        }
-
-        // Generate inline style for precise positioning
-        let posStyle = '';
-        if (side === 'top' || side === 'bottom') {
-          posStyle = `left: ${posPercent}%; transform: translateX(-50%);`;
-          if (side === 'top') posStyle += ' top: -6px;';
-          else posStyle += ' bottom: -6px;';
-        } else {
-          posStyle = `top: ${posPercent}%; transform: translateY(-50%);`;
-          if (side === 'left') posStyle += ' left: -6px;';
-          else posStyle += ' right: -6px;';
-        }
-
-        // Show label permanently if: output port (bottom) OR multiple ports on node
-        const alwaysVisible = (side === 'bottom' || hasMultiplePorts) ? 'always-visible' : '';
-
-        portsHtml += `
-          <div class="port-handle ${isConnected ? 'connected' : ''}"
-               style="${posStyle}"
-               data-node-id="${node.id}"
-               data-port-id="${port.id}"
-               data-side="${side}"
-               data-index="${idx}"
-               title="${escapeHtml(port.name)}"></div>
-          <span class="port-label ${alwaysVisible}" style="${posStyle}">${escapeHtml(port.name)}</span>
-        `;
-      });
-    });
-    portsHtml += '</div>';
+    const portsHtml = generatePortsHtml(node);
 
     el.innerHTML = `
       ${portsHtml}
@@ -1126,10 +1272,77 @@ function handleNodeDrag(e) {
 
   // Update lines in real-time
   drawLines();
+
+  // Check for container drop zones (only for non-container nodes)
+  if (!dragNode.isContainer) {
+    const dropZones = document.querySelectorAll('.container-drop-zone');
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+
+    dropZones.forEach(zone => {
+      const rect = zone.getBoundingClientRect();
+      const isOver = mouseX >= rect.left && mouseX <= rect.right &&
+                     mouseY >= rect.top && mouseY <= rect.bottom;
+      const containerId = zone.dataset.containerId;
+
+      // Don't allow dropping on own container if already in one
+      if (containerId !== dragNode.containerId) {
+        zone.classList.toggle('drag-over', isOver);
+      }
+    });
+  }
 }
 
-async function endNodeDrag() {
+async function endNodeDrag(e) {
   if (!isDragging || !dragNode) return;
+
+  // Check if dropping on a container drop zone (only for non-container nodes)
+  let droppedOnContainer = null;
+  if (!dragNode.isContainer && e) {
+    const dropZones = document.querySelectorAll('.container-drop-zone');
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+
+    dropZones.forEach(zone => {
+      const rect = zone.getBoundingClientRect();
+      const isOver = mouseX >= rect.left && mouseX <= rect.right &&
+                     mouseY >= rect.top && mouseY <= rect.bottom;
+      if (isOver) {
+        droppedOnContainer = zone.dataset.containerId;
+      }
+      zone.classList.remove('drag-over');
+    });
+  }
+
+  // Clear any remaining drag-over states
+  document.querySelectorAll('.container-drop-zone.drag-over').forEach(zone => {
+    zone.classList.remove('drag-over');
+  });
+
+  // Handle container drop
+  if (droppedOnContainer && droppedOnContainer !== dragNode.containerId) {
+    saveStateForUndo(`Add node "${dragNode.name}" to container`);
+    const node = config.nodes.find(n => n.id === dragNode.id);
+    if (node) {
+      node.containerId = droppedOnContainer;
+      // Clear temporary position
+      delete node._tempX;
+      delete node._tempY;
+    }
+    isDragging = false;
+    dragNode = null;
+    dragOffsetX = 0;
+    dragOffsetY = 0;
+    multiDragOffsets.clear();
+    await saveConfig();
+    renderTree(config.nodes);
+    updateMinimap();
+    const container = config.nodes.find(n => n.id === droppedOnContainer);
+    showNotification(`Node added to ${container?.name || 'container'}`, 'success');
+    return;
+  }
+
+  // Original endNodeDrag logic follows
 
   const el = document.getElementById(`node-${dragNode.id}`);
   el.classList.remove('dragging');
@@ -1384,6 +1597,48 @@ function showNodeContextMenu(e, node) {
   const menu = document.getElementById('context-menu');
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
+
+  // Handle container-specific options
+  const containerSection = document.getElementById('context-container-section');
+  const childSection = document.getElementById('context-child-section');
+  const addToContainerSection = document.getElementById('context-add-to-container-section');
+  const addToContainerItems = document.getElementById('context-add-to-container-items');
+  const containerToggle = document.getElementById('context-container-toggle');
+
+  // Show container toggle if node is a container
+  if (node.isContainer) {
+    containerSection.classList.remove('hidden');
+    const isExpanded = node.expanded !== false;
+    containerToggle.innerHTML = `
+      <i data-lucide="${isExpanded ? 'chevrons-down-up' : 'chevrons-up-down'}" class="w-4 h-4"></i>
+      <span>${isExpanded ? 'Collapse' : 'Expand'} Container</span>
+    `;
+  } else {
+    containerSection.classList.add('hidden');
+  }
+
+  // Show "Remove from container" if node is in a container
+  if (node.containerId && !node.isContainer) {
+    childSection.classList.remove('hidden');
+  } else {
+    childSection.classList.add('hidden');
+  }
+
+  // Show "Add to container" options for standalone non-container nodes
+  const containers = config.nodes.filter(n => n.isContainer && n.id !== node.id);
+  if (!node.isContainer && !node.containerId && containers.length > 0) {
+    addToContainerSection.classList.remove('hidden');
+    addToContainerItems.innerHTML = containers.map(c => `
+      <div class="context-menu-item" onclick="addToContainerFromContext('${c.id}')">
+        <i data-lucide="log-in" class="w-4 h-4"></i>
+        <span>Add to ${escapeHtml(c.name)}</span>
+      </div>
+    `).join('');
+  } else {
+    addToContainerSection.classList.add('hidden');
+    addToContainerItems.innerHTML = '';
+  }
+
   menu.classList.remove('hidden');
   lucide.createIcons();
 }
@@ -1455,6 +1710,14 @@ function deleteNodeFromContext() {
 
     const idx = config.nodes.findIndex(n => n.id === contextMenuNode.id);
     if (idx !== -1) {
+      // If this is a container, also remove containerId from children
+      if (contextMenuNode.isContainer) {
+        config.nodes.forEach(n => {
+          if (n.containerId === contextMenuNode.id) {
+            n.containerId = null;
+          }
+        });
+      }
       // Also remove connections involving this node
       config.connections = config.connections.filter(c =>
         c.sourceNodeId !== contextMenuNode.id && c.targetNodeId !== contextMenuNode.id
@@ -1467,6 +1730,24 @@ function deleteNodeFromContext() {
       toastSuccess('Node Deleted', `"${contextMenuNode.name}" has been removed`);
     }
   }
+}
+
+function toggleContainerFromContext() {
+  if (!contextMenuNode || !contextMenuNode.isContainer) return;
+  hideContextMenu();
+  toggleContainerExpand(contextMenuNode.id);
+}
+
+function removeFromContainerFromContext() {
+  if (!contextMenuNode || !contextMenuNode.containerId) return;
+  hideContextMenu();
+  removeFromContainer(contextMenuNode.id);
+}
+
+function addToContainerFromContext(containerId) {
+  if (!contextMenuNode || contextMenuNode.isContainer) return;
+  hideContextMenu();
+  addToContainer(contextMenuNode.id, containerId);
 }
 
 // ============================================
@@ -1762,6 +2043,14 @@ function openNodeModal(node = null) {
   document.getElementById('node-link-type').value = node ? node.linkType || '' : '';
   document.getElementById('node-link-speed').value = node ? node.linkSpeed || '' : '';
 
+  // Container options
+  document.getElementById('node-is-container').value = node && node.isContainer ? 'true' : 'false';
+  document.getElementById('node-container-type').value = node ? node.containerType || 'proxmox' : 'proxmox';
+  toggleContainerOptions();
+
+  // Populate parent container dropdown
+  populateContainerDropdown(node);
+
   // Initialize ports
   if (node && node.ports && node.ports.length > 0) {
     editingNodePorts = JSON.parse(JSON.stringify(node.ports));
@@ -1795,6 +2084,73 @@ function openNodeModal(node = null) {
   }
 
   openModal('node-modal');
+}
+
+// Toggle container type options visibility
+function toggleContainerOptions() {
+  const isContainer = document.getElementById('node-is-container').value === 'true';
+  const containerTypeGroup = document.getElementById('container-type-group');
+  const containerParentGroup = document.getElementById('container-parent-group');
+
+  containerTypeGroup.style.display = isContainer ? 'block' : 'none';
+  // Show parent container for non-container nodes
+  containerParentGroup.style.display = isContainer ? 'none' : 'block';
+}
+
+// Populate container dropdown with available containers
+function populateContainerDropdown(currentNode) {
+  const select = document.getElementById('node-parent-container');
+  let options = '<option value="">No parent (standalone)</option>';
+
+  // Find all container nodes
+  config.nodes.forEach(n => {
+    if (n.isContainer && (!currentNode || n.id !== currentNode.id)) {
+      options += `<option value="${n.id}">${escapeHtml(n.name)} (${n.containerType || 'container'})</option>`;
+    }
+  });
+
+  select.innerHTML = options;
+
+  // Set current value
+  if (currentNode && currentNode.containerId) {
+    select.value = currentNode.containerId;
+  }
+}
+
+// Toggle container expand/collapse
+function toggleContainerExpand(nodeId) {
+  const node = config.nodes.find(n => n.id === nodeId);
+  if (node && node.isContainer) {
+    node.expanded = !node.expanded;
+    saveUndo();
+    renderTree(config.nodes);
+    saveConfig();
+  }
+}
+
+// Remove node from container (make it standalone)
+function removeFromContainer(nodeId) {
+  const node = config.nodes.find(n => n.id === nodeId);
+  if (node && node.containerId) {
+    saveUndo();
+    node.containerId = null;
+    renderTree(config.nodes);
+    saveConfig();
+    showNotification('Node removed from container', 'success');
+  }
+}
+
+// Add node to container
+function addToContainer(nodeId, containerId) {
+  const node = config.nodes.find(n => n.id === nodeId);
+  const container = config.nodes.find(n => n.id === containerId);
+  if (node && container && container.isContainer && !node.isContainer) {
+    saveUndo();
+    node.containerId = containerId;
+    renderTree(config.nodes);
+    saveConfig();
+    showNotification(`Node added to ${container.name}`, 'success');
+  }
 }
 
 function renderNodePortsList() {
@@ -1861,6 +2217,11 @@ function saveNode() {
   const linkType = document.getElementById('node-link-type').value || null;
   const linkSpeed = document.getElementById('node-link-speed').value || null;
 
+  // Container properties
+  const isContainer = document.getElementById('node-is-container').value === 'true';
+  const containerType = document.getElementById('node-container-type').value || 'custom';
+  const containerId = document.getElementById('node-parent-container').value || null;
+
   // Validation first (before saving undo state)
   if (!name) {
     toastError('Validation Error', 'Node name is required');
@@ -1908,7 +2269,12 @@ function saveNode() {
     sshPass,
     linkType,
     linkSpeed,
-    ports
+    ports,
+    // Container properties
+    isContainer,
+    containerType: isContainer ? containerType : null,
+    containerId: isContainer ? null : containerId, // Container nodes can't be inside other containers
+    expanded: true // Default expanded state for containers
   };
 
   // Save state for undo before making changes
