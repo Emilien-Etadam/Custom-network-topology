@@ -348,6 +348,288 @@
       background: rgba(128,128,128,0.08);
       color: var(--text-secondary);
     }
+
+    /* --- CONTAINER NODES --- */
+    .node-container.is-container {
+      min-width: 200px;
+      min-height: 180px;
+      width: auto;
+      height: auto;
+      border: 2px dashed rgba(59, 130, 246, 0.4);
+      background: var(--bg-card);
+    }
+    .node-container.is-container.expanded {
+      width: auto;
+      height: auto;
+    }
+    .node-container.is-container.collapsed {
+      width: 160px !important;
+      height: 80px !important;
+      min-width: 160px;
+      min-height: 80px;
+    }
+    .container-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(59, 130, 246, 0.1);
+      border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+      border-radius: 12px 12px 0 0;
+      cursor: move;
+    }
+    .container-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .container-header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .container-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .container-toggle:hover {
+      background: rgba(255,255,255,0.1);
+      color: var(--text-primary);
+    }
+    .container-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .container-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .container-icon i {
+      width: 14px;
+      height: 14px;
+      color: var(--text-muted);
+    }
+    .container-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .container-name {
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+    .container-count {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .container-status {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .container-status.online {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+    .container-status.offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+    .container-subtitle {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+    .container-type-badge {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .container-btn {
+      padding: 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all 0.2s;
+    }
+    .container-btn:hover {
+      background: rgba(255,255,255,0.1);
+      color: var(--text-primary);
+    }
+    .container-content {
+      padding: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      min-height: 80px;
+      position: relative;
+    }
+    .container-content.collapsed {
+      display: none;
+    }
+    .container-drop-zone {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+      margin-top: 8px;
+      border: 2px dashed var(--border-light);
+      border-radius: 8px;
+      transition: all 0.2s;
+      color: var(--text-muted);
+      font-size: 11px;
+      background: transparent;
+    }
+    .container-drop-zone:hover {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.05);
+    }
+    .container-drop-zone.drag-over {
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+    .node-container.is-container.drag-over .container-drop-zone {
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.1);
+    }
+    .container-empty-text {
+      color: var(--text-muted);
+      font-size: 11px;
+      text-align: center;
+      width: 100%;
+      padding: 20px;
+    }
+
+    .container-empty {
+      color: var(--text-muted);
+      font-size: 11px;
+      text-align: center;
+      width: 100%;
+      padding: 15px;
+      font-style: italic;
+    }
+
+    /* Child nodes inside container */
+    .child-node {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .child-node:hover {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: #3b82f6;
+    }
+    .child-node-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .child-node-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .child-node-icon i {
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+    }
+    .child-node-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .child-node-name {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .child-node-address {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .child-node-status {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 3px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .child-node-status.online {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+    .child-node-status.offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+
+    /* Container type colors */
+    .node-container.container-proxmox { border-color: rgba(230, 126, 34, 0.5); }
+    .node-container.container-proxmox .container-header { background: rgba(230, 126, 34, 0.15); }
+    .node-container.container-proxmox .container-type-badge { background: rgba(230, 126, 34, 0.2); color: #e67e22; }
+
+    .node-container.container-docker { border-color: rgba(41, 128, 185, 0.5); }
+    .node-container.container-docker .container-header { background: rgba(41, 128, 185, 0.15); }
+    .node-container.container-docker .container-type-badge { background: rgba(41, 128, 185, 0.2); color: #2980b9; }
+
+    .node-container.container-kubernetes { border-color: rgba(50, 110, 200, 0.5); }
+    .node-container.container-kubernetes .container-header { background: rgba(50, 110, 200, 0.15); }
+    .node-container.container-kubernetes .container-type-badge { background: rgba(50, 110, 200, 0.2); color: #326de6; }
+
+    .node-container.container-vmware { border-color: rgba(100, 100, 100, 0.5); }
+    .node-container.container-vmware .container-header { background: rgba(100, 100, 100, 0.15); }
+    .node-container.container-vmware .container-type-badge { background: rgba(100, 100, 100, 0.2); color: #888; }
+
+    .node-container.container-rack { border-color: rgba(155, 89, 182, 0.5); }
+    .node-container.container-rack .container-header { background: rgba(155, 89, 182, 0.15); }
+    .node-container.container-rack .container-type-badge { background: rgba(155, 89, 182, 0.2); color: #9b59b6; }
   </style>
 </head>
 <body>
@@ -629,6 +911,33 @@
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div class="form-group">
+          <label class="form-label">Node Type</label>
+          <select id="node-is-container" class="form-input" onchange="toggleContainerOptions()">
+            <option value="false">Standard Node</option>
+            <option value="true">Container (can hold child nodes)</option>
+          </select>
+        </div>
+        <div class="form-group" id="container-type-group" style="display: none;">
+          <label class="form-label">Container Type</label>
+          <select id="node-container-type" class="form-input">
+            <option value="proxmox">Proxmox (VM/CT)</option>
+            <option value="docker">Docker</option>
+            <option value="kubernetes">Kubernetes</option>
+            <option value="vmware">VMware</option>
+            <option value="rack">Physical Rack</option>
+            <option value="cloud">Cloud (VPC)</option>
+            <option value="custom">Custom Group</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" id="container-parent-group" style="display: none;">
+        <label class="form-label">Parent Container</label>
+        <select id="node-parent-container" class="form-input">
+          <option value="">No parent (standalone)</option>
+        </select>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="form-group">
           <label class="form-label">Primary Parent</label>
           <select id="node-primary-parent" class="form-input"></select>
         </div>
@@ -719,6 +1028,24 @@
   <div class="context-menu-item" onclick="showStatusHistoryFromContext()">
     <i data-lucide="clock" class="w-4 h-4"></i>
     <span>Status History</span>
+  </div>
+  <div id="context-container-section" class="hidden">
+    <div class="context-menu-divider"></div>
+    <div id="context-container-toggle" class="context-menu-item" onclick="toggleContainerFromContext()">
+      <i data-lucide="chevrons-down-up" class="w-4 h-4"></i>
+      <span>Collapse Container</span>
+    </div>
+  </div>
+  <div id="context-child-section" class="hidden">
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" onclick="removeFromContainerFromContext()">
+      <i data-lucide="log-out" class="w-4 h-4"></i>
+      <span>Remove from Container</span>
+    </div>
+  </div>
+  <div id="context-add-to-container-section" class="hidden">
+    <div class="context-menu-divider"></div>
+    <div id="context-add-to-container-items"></div>
   </div>
   <div class="context-menu-divider"></div>
   <div class="context-menu-item danger" onclick="deleteNodeFromContext()">
