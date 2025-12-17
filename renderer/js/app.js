@@ -600,27 +600,87 @@ function renderTree(nodes) {
       custom: 'Container'
     };
 
-    // Generate children HTML
-    let childrenHtml = '';
-    if (isExpanded && children.length > 0) {
-      children.forEach((child, idx) => {
-        const childIsUp = child.status === true;
-        const childIconHtml = generateIconHtml(child);
-        childrenHtml += `
-          <div class="child-node" data-node-id="${child.id}" data-child-index="${idx}">
-            <div class="child-node-icon">
-              ${childIconHtml}
-            </div>
-            <div class="child-node-info">
-              <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
-              <div class="child-node-address">${escapeHtml(child.address || '')}</div>
-            </div>
-            <div class="child-node-status ${childIsUp ? 'online' : 'offline'}">
-              ${childIsUp ? 'ON' : 'OFF'}
-            </div>
+    // Helper function to generate child node HTML
+    function generateChildHtml(child, idx) {
+      const childIsUp = child.status === true;
+      const childIconHtml = generateIconHtml(child);
+      return `
+        <div class="child-node" data-node-id="${child.id}" data-child-index="${idx}">
+          <div class="child-node-icon">
+            ${childIconHtml}
           </div>
-        `;
-      });
+          <div class="child-node-info">
+            <div class="child-node-name">${escapeHtml(child.name || child.id)}</div>
+            <div class="child-node-address">${escapeHtml(child.address || '')}</div>
+          </div>
+          <div class="child-node-status ${childIsUp ? 'online' : 'offline'}">
+            ${childIsUp ? 'ON' : 'OFF'}
+          </div>
+        </div>
+      `;
+    }
+
+    // Generate children HTML with VLAN zones support
+    let childrenHtml = '';
+    const zones = node.zones || [];
+
+    if (isExpanded) {
+      if (zones.length > 0) {
+        // Group children by zones
+        zones.forEach(zone => {
+          const zoneChildren = children.filter(c => c.zoneId === zone.id);
+          const unassignedChildren = children.filter(c => !c.zoneId && zone === zones[0]);
+
+          childrenHtml += `
+            <div class="vlan-zone" data-zone-id="${zone.id}">
+              <div class="vlan-zone-header" onclick="toggleZoneCollapse('${node.id}', '${zone.id}')">
+                <div class="vlan-zone-header-left">
+                  <span class="vlan-zone-badge" style="background: ${zone.color}20; color: ${zone.color}; border: 1px solid ${zone.color}40;">
+                    VLAN ${zone.vlanId}
+                  </span>
+                  <span class="vlan-zone-name">${escapeHtml(zone.name)}</span>
+                </div>
+                <span class="vlan-zone-count">${zoneChildren.length} node${zoneChildren.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div class="vlan-zone-content" id="zone-content-${zone.id}">
+                ${zoneChildren.length > 0
+                  ? zoneChildren.map((child, idx) => generateChildHtml(child, idx)).join('')
+                  : '<div class="vlan-zone-empty">No nodes in this zone</div>'
+                }
+                <div class="vlan-zone-drop" data-container-id="${node.id}" data-zone-id="${zone.id}">
+                  Drop node here
+                </div>
+              </div>
+            </div>
+          `;
+        });
+
+        // Show unassigned nodes (not in any zone)
+        const unassignedNodes = children.filter(c => !c.zoneId);
+        if (unassignedNodes.length > 0) {
+          childrenHtml += `
+            <div class="vlan-zone">
+              <div class="vlan-zone-header">
+                <div class="vlan-zone-header-left">
+                  <span class="vlan-zone-badge" style="background: rgba(100,100,100,0.2); color: #888;">
+                    DEFAULT
+                  </span>
+                  <span class="vlan-zone-name">Unassigned</span>
+                </div>
+                <span class="vlan-zone-count">${unassignedNodes.length} node${unassignedNodes.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div class="vlan-zone-content">
+                ${unassignedNodes.map((child, idx) => generateChildHtml(child, idx)).join('')}
+              </div>
+            </div>
+          `;
+        }
+      } else if (children.length > 0) {
+        // No zones defined, show all children flat
+        children.forEach((child, idx) => {
+          childrenHtml += generateChildHtml(child, idx);
+        });
+      }
     }
 
     el.innerHTML = `
@@ -647,10 +707,12 @@ function renderTree(nodes) {
       </div>
       <div class="container-content ${isExpanded ? '' : 'collapsed'}">
         ${childrenHtml || '<div class="container-empty">Drop nodes here or create new ones</div>'}
-        <div class="container-drop-zone" data-container-id="${node.id}">
-          <i data-lucide="plus" class="w-4 h-4"></i>
-          <span>Drop node here</span>
-        </div>
+        ${zones.length === 0 ? `
+          <div class="container-drop-zone" data-container-id="${node.id}">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>Drop node here</span>
+          </div>
+        ` : ''}
       </div>
     `;
 
@@ -1273,13 +1335,14 @@ function handleNodeDrag(e) {
   // Update lines in real-time
   drawLines();
 
-  // Check for container drop zones (only for non-container nodes)
+  // Check for container and zone drop zones (only for non-container nodes)
   if (!dragNode.isContainer) {
-    const dropZones = document.querySelectorAll('.container-drop-zone');
     const mouseX = e.clientX;
     const mouseY = e.clientY;
 
-    dropZones.forEach(zone => {
+    // Check container drop zones
+    const containerDropZones = document.querySelectorAll('.container-drop-zone');
+    containerDropZones.forEach(zone => {
       const rect = zone.getBoundingClientRect();
       const isOver = mouseX >= rect.left && mouseX <= rect.right &&
                      mouseY >= rect.top && mouseY <= rect.bottom;
@@ -1290,41 +1353,71 @@ function handleNodeDrag(e) {
         zone.classList.toggle('drag-over', isOver);
       }
     });
+
+    // Check VLAN zone drop zones
+    const zoneDropZones = document.querySelectorAll('.vlan-zone-drop');
+    zoneDropZones.forEach(zone => {
+      const rect = zone.getBoundingClientRect();
+      const isOver = mouseX >= rect.left && mouseX <= rect.right &&
+                     mouseY >= rect.top && mouseY <= rect.bottom;
+      zone.classList.toggle('drag-over', isOver);
+    });
   }
 }
 
 async function endNodeDrag(e) {
   if (!isDragging || !dragNode) return;
 
-  // Check if dropping on a container drop zone (only for non-container nodes)
+  // Check if dropping on a container or zone drop zone (only for non-container nodes)
   let droppedOnContainer = null;
+  let droppedOnZone = null;
+
   if (!dragNode.isContainer && e) {
-    const dropZones = document.querySelectorAll('.container-drop-zone');
     const mouseX = e.clientX;
     const mouseY = e.clientY;
 
-    dropZones.forEach(zone => {
+    // First check VLAN zone drop zones (higher priority)
+    const zoneDropZones = document.querySelectorAll('.vlan-zone-drop');
+    zoneDropZones.forEach(zone => {
       const rect = zone.getBoundingClientRect();
       const isOver = mouseX >= rect.left && mouseX <= rect.right &&
                      mouseY >= rect.top && mouseY <= rect.bottom;
       if (isOver) {
         droppedOnContainer = zone.dataset.containerId;
+        droppedOnZone = zone.dataset.zoneId;
       }
       zone.classList.remove('drag-over');
     });
+
+    // Then check container drop zones (if not already dropped on a zone)
+    if (!droppedOnContainer) {
+      const containerDropZones = document.querySelectorAll('.container-drop-zone');
+      containerDropZones.forEach(zone => {
+        const rect = zone.getBoundingClientRect();
+        const isOver = mouseX >= rect.left && mouseX <= rect.right &&
+                       mouseY >= rect.top && mouseY <= rect.bottom;
+        if (isOver) {
+          droppedOnContainer = zone.dataset.containerId;
+        }
+        zone.classList.remove('drag-over');
+      });
+    }
   }
 
   // Clear any remaining drag-over states
-  document.querySelectorAll('.container-drop-zone.drag-over').forEach(zone => {
+  document.querySelectorAll('.container-drop-zone.drag-over, .vlan-zone-drop.drag-over').forEach(zone => {
     zone.classList.remove('drag-over');
   });
 
-  // Handle container drop
-  if (droppedOnContainer && droppedOnContainer !== dragNode.containerId) {
-    saveStateForUndo(`Add node "${dragNode.name}" to container`);
+  // Handle container/zone drop
+  if (droppedOnContainer && (droppedOnContainer !== dragNode.containerId || droppedOnZone !== dragNode.zoneId)) {
+    const zone = droppedOnZone ? config.nodes.find(n => n.id === droppedOnContainer)?.zones?.find(z => z.id === droppedOnZone) : null;
+    const zoneName = zone ? ` (VLAN ${zone.vlanId})` : '';
+    saveStateForUndo(`Add node "${dragNode.name}" to container${zoneName}`);
     const node = config.nodes.find(n => n.id === dragNode.id);
     if (node) {
       node.containerId = droppedOnContainer;
+      node.zoneId = droppedOnZone;
       // Clear temporary position
       delete node._tempX;
       delete node._tempY;
@@ -1338,7 +1431,7 @@ async function endNodeDrag(e) {
     renderTree(config.nodes);
     updateMinimap();
     const container = config.nodes.find(n => n.id === droppedOnContainer);
-    showNotification(`Node added to ${container?.name || 'container'}`, 'success');
+    showNotification(`Node added to ${container?.name || 'container'}${zoneName}`, 'success');
     return;
   }
 
@@ -2046,10 +2139,29 @@ function openNodeModal(node = null) {
   // Container options
   document.getElementById('node-is-container').value = node && node.isContainer ? 'true' : 'false';
   document.getElementById('node-container-type').value = node ? node.containerType || 'proxmox' : 'proxmox';
+
+  // Load zones for container nodes
+  if (node && node.isContainer && node.zones) {
+    editingContainerZones = JSON.parse(JSON.stringify(node.zones));
+  } else {
+    editingContainerZones = [];
+  }
+  renderContainerZonesList();
+
   toggleContainerOptions();
 
   // Populate parent container dropdown
   populateContainerDropdown(node);
+
+  // Set zone for child nodes
+  if (node && node.zoneId) {
+    const nodeZoneSelect = document.getElementById('node-zone');
+    if (nodeZoneSelect) {
+      setTimeout(() => {
+        nodeZoneSelect.value = node.zoneId;
+      }, 0);
+    }
+  }
 
   // Initialize ports
   if (node && node.ports && node.ports.length > 0) {
@@ -2086,15 +2198,120 @@ function openNodeModal(node = null) {
   openModal('node-modal');
 }
 
+// Variable to track zones being edited
+let editingContainerZones = [];
+
 // Toggle container type options visibility
 function toggleContainerOptions() {
   const isContainer = document.getElementById('node-is-container').value === 'true';
   const containerTypeGroup = document.getElementById('container-type-group');
+  const containerZonesGroup = document.getElementById('container-zones-group');
   const containerParentGroup = document.getElementById('container-parent-group');
+  const nodeZoneGroup = document.getElementById('node-zone-group');
 
   containerTypeGroup.style.display = isContainer ? 'block' : 'none';
-  // Show parent container for non-container nodes
+  containerZonesGroup.style.display = isContainer ? 'block' : 'none';
+
+  // Show parent container and zone selection for non-container nodes
   containerParentGroup.style.display = isContainer ? 'none' : 'block';
+
+  // Update zone dropdown visibility based on parent container selection
+  if (!isContainer) {
+    updateZoneDropdown();
+  } else {
+    if (nodeZoneGroup) nodeZoneGroup.style.display = 'none';
+  }
+}
+
+// Update zone dropdown when parent container changes
+function updateZoneDropdown() {
+  const containerId = document.getElementById('node-parent-container').value;
+  const nodeZoneGroup = document.getElementById('node-zone-group');
+  const nodeZoneSelect = document.getElementById('node-zone');
+
+  if (!containerId) {
+    if (nodeZoneGroup) nodeZoneGroup.style.display = 'none';
+    return;
+  }
+
+  const container = config.nodes.find(n => n.id === containerId);
+  if (!container || !container.zones || container.zones.length === 0) {
+    if (nodeZoneGroup) nodeZoneGroup.style.display = 'none';
+    return;
+  }
+
+  if (nodeZoneGroup) nodeZoneGroup.style.display = 'block';
+  let options = '<option value="">No zone (default)</option>';
+  container.zones.forEach(zone => {
+    options += `<option value="${zone.id}">VLAN ${zone.vlanId} - ${escapeHtml(zone.name)}</option>`;
+  });
+  if (nodeZoneSelect) nodeZoneSelect.innerHTML = options;
+}
+
+// Add a new VLAN zone
+function addContainerZone() {
+  const newZone = {
+    id: 'zone-' + Date.now(),
+    vlanId: editingContainerZones.length > 0 ? Math.max(...editingContainerZones.map(z => z.vlanId || 0)) + 10 : 10,
+    name: 'New Zone',
+    color: getRandomZoneColor()
+  };
+  editingContainerZones.push(newZone);
+  renderContainerZonesList();
+}
+
+// Remove a VLAN zone
+function removeContainerZone(zoneId) {
+  editingContainerZones = editingContainerZones.filter(z => z.id !== zoneId);
+  renderContainerZonesList();
+}
+
+// Update a VLAN zone property
+function updateContainerZone(zoneId, property, value) {
+  const zone = editingContainerZones.find(z => z.id === zoneId);
+  if (zone) {
+    zone[property] = property === 'vlanId' ? parseInt(value) || 0 : value;
+  }
+}
+
+// Get a random color for zones
+function getRandomZoneColor() {
+  const colors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+  return colors[Math.floor(Math.random() * colors.length)];
+}
+
+// Render the zones list in the modal
+function renderContainerZonesList() {
+  const container = document.getElementById('container-zones-list');
+  if (!container) return;
+
+  if (editingContainerZones.length === 0) {
+    container.innerHTML = '<div class="text-muted text-sm text-center py-2">No zones defined</div>';
+    lucide.createIcons();
+    return;
+  }
+
+  let html = '';
+  editingContainerZones.forEach((zone, idx) => {
+    html += `
+      <div class="flex items-center gap-2 p-2 bg-slate-800 rounded mb-2">
+        <input type="color" value="${zone.color}"
+               onchange="updateContainerZone('${zone.id}', 'color', this.value)"
+               class="w-8 h-8 rounded cursor-pointer border-0" style="padding: 0;">
+        <input type="number" value="${zone.vlanId}" placeholder="VLAN ID"
+               onchange="updateContainerZone('${zone.id}', 'vlanId', this.value)"
+               class="w-20 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
+        <input type="text" value="${escapeHtml(zone.name)}" placeholder="Zone name"
+               onchange="updateContainerZone('${zone.id}', 'name', this.value)"
+               class="flex-1 px-2 py-1 bg-slate-900 border border-slate-600 rounded text-sm">
+        <button onclick="removeContainerZone('${zone.id}')" class="p-1 text-red-400 hover:text-red-300">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+      </div>
+    `;
+  });
+  container.innerHTML = html;
+  lucide.createIcons();
 }
 
 // Populate container dropdown with available containers
@@ -2115,6 +2332,9 @@ function populateContainerDropdown(currentNode) {
   if (currentNode && currentNode.containerId) {
     select.value = currentNode.containerId;
   }
+
+  // Update zone dropdown after setting container
+  updateZoneDropdown();
 }
 
 // Toggle container expand/collapse
@@ -2128,25 +2348,35 @@ function toggleContainerExpand(nodeId) {
   }
 }
 
+// Toggle VLAN zone collapse
+function toggleZoneCollapse(containerId, zoneId) {
+  const zoneContent = document.getElementById(`zone-content-${zoneId}`);
+  if (zoneContent) {
+    zoneContent.classList.toggle('collapsed');
+  }
+}
+
 // Remove node from container (make it standalone)
 function removeFromContainer(nodeId) {
   const node = config.nodes.find(n => n.id === nodeId);
   if (node && node.containerId) {
     saveUndo();
     node.containerId = null;
+    node.zoneId = null; // Also clear zone assignment
     renderTree(config.nodes);
     saveConfig();
     showNotification('Node removed from container', 'success');
   }
 }
 
-// Add node to container
-function addToContainer(nodeId, containerId) {
+// Add node to container (optionally to a specific zone)
+function addToContainer(nodeId, containerId, zoneId = null) {
   const node = config.nodes.find(n => n.id === nodeId);
   const container = config.nodes.find(n => n.id === containerId);
   if (node && container && container.isContainer && !node.isContainer) {
     saveUndo();
     node.containerId = containerId;
+    node.zoneId = zoneId;
     renderTree(config.nodes);
     saveConfig();
     showNotification(`Node added to ${container.name}`, 'success');
@@ -2221,6 +2451,7 @@ function saveNode() {
   const isContainer = document.getElementById('node-is-container').value === 'true';
   const containerType = document.getElementById('node-container-type').value || 'custom';
   const containerId = document.getElementById('node-parent-container').value || null;
+  const zoneId = document.getElementById('node-zone')?.value || null;
 
   // Validation first (before saving undo state)
   if (!name) {
@@ -2273,7 +2504,9 @@ function saveNode() {
     // Container properties
     isContainer,
     containerType: isContainer ? containerType : null,
+    zones: isContainer ? editingContainerZones : null, // VLAN zones for containers
     containerId: isContainer ? null : containerId, // Container nodes can't be inside other containers
+    zoneId: isContainer ? null : zoneId, // Zone assignment for child nodes
     expanded: true // Default expanded state for containers
   };
 
